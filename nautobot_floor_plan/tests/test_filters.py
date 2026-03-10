@@ -6,7 +6,7 @@ from nautobot_floor_plan import filters, models
 from nautobot_floor_plan.tests import fixtures
 
 
-class FloorPlanFilterTestCase(FilterTestCases.FilterTestCase):
+class FloorPlanFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disable=too-many-ancestors
     """FloorPlan Filter Test Case."""
 
     queryset = models.FloorPlan.objects.all()
