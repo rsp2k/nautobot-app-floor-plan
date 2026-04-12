@@ -14,6 +14,18 @@ We will continue to support the previous major release for users of Nautobot LTM
 
 <!-- towncrier release notes start -->
 
+## [v3.0.1 (2026-04-12)](https://github.com/nautobot/nautobot-app-floor-plan/releases/tag/v3.0.1)
+
+### Documentation
+
+- [#204](https://github.com/nautobot/nautobot-app-floor-plan/issues/204) - Updated documentation to include 3.0 screenshots.
+
+### Housekeeping
+
+- Rebaked from the cookie `nautobot-app-v3.0.0`.
+- Rebaked from the cookie `nautobot-app-v3.1.2`.
+- Rebaked from the cookie `nautobot-app-v3.1.3`.
+
 ## [v3.0.0 (2025-11-14)](https://github.com/nautobot/nautobot-app-floor-plan/releases/tag/v3.0.0)
 
 ### Added
