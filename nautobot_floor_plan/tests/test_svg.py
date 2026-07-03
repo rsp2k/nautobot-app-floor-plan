@@ -751,7 +751,9 @@ class FloorPlanIconRenderingTests(TestCase):
             placed_content_type=ContentType.objects.get_for_model(Tenant),
             placed_object_id=tenant.pk,
         )
-        tile.validated_save()
+        # Insert without validation to simulate a type that was registered when placed but has since
+        # been removed (a live placement of an unregistered type is rejected by validation in G3).
+        tile.save()
         svg_str = self._render()
         self.assertIn(ICON_GLYPHS["help"][0], svg_str)
 

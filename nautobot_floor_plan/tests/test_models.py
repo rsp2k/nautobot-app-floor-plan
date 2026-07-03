@@ -6,6 +6,7 @@ from django.db import IntegrityError, transaction
 from nautobot.core.testing import TestCase
 from nautobot.dcim.models import Device, Location, PowerFeed, PowerPanel, Rack, RackGroup
 from nautobot.extras.models import Status
+from nautobot.tenancy.models import Tenant
 
 from nautobot_floor_plan import models
 from nautobot_floor_plan.choices import ObjectOrientationChoices, PlacementModeChoices
@@ -1069,3 +1070,52 @@ class TestPlacementRegistry(TestCase):
         floor = prerequisites["floors"][0]
         rack = Rack.objects.create(name="RegLocRack", status=prerequisites["status"], location=floor)
         self.assertEqual(registry.resolve_location(rack), floor)
+
+
+class TestGenericPlacementValidation(TestCase):
+    """Test model-level validation of a generic (non-typed-FK) placement (Wave G3)."""
+
+    def setUp(self):
+        """Set up two locations and a plan on the first."""
+        prerequisites = fixtures.create_prerequisites(floor_count=2)
+        self.status = prerequisites["status"]
+        self.floors = prerequisites["floors"]
+        self.plan = models.FloorPlan.objects.create(
+            location=self.floors[0],
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+
+    def _generic_tile(self, obj):
+        return models.FloorPlanTile(
+            floor_plan=self.plan,
+            status=self.status,
+            x_origin=1,
+            y_origin=1,
+            pos_x=0.5,
+            pos_y=0.5,
+            placed_content_type=ContentType.objects.get_for_model(obj),
+            placed_object_id=obj.pk,
+        )
+
+    def test_wrong_location_rejected(self):
+        """A generically-placed object in a different Location than the plan is rejected."""
+        rack = Rack.objects.create(name="ElsewhereRack", status=self.status, location=self.floors[1])
+        with self.assertRaises(ValidationError):
+            self._generic_tile(rack).validated_save()
+
+    def test_unregistered_type_rejected(self):
+        """A generically-placed object of an unregistered type is rejected."""
+        tenant = Tenant.objects.create(name="AcmeCorp")
+        with self.assertRaises(ValidationError):
+            self._generic_tile(tenant).validated_save()
+
+    def test_registered_same_location_allowed(self):
+        """A generically-placed registered object in the plan's Location validates."""
+        rack = Rack.objects.create(name="HereRack", status=self.status, location=self.floors[0])
+        tile = self._generic_tile(rack)
+        tile.validated_save()  # should not raise
+        self.assertEqual(tile.placed_object, rack)

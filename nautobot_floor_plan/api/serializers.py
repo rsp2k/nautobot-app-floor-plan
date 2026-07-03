@@ -57,8 +57,8 @@ class FloorPlanTileSerializer(NautobotModelSerializer, TaggedModelSerializerMixi
 
         model = models.FloorPlanTile
         fields = "__all__"
-        # Generic placement is mirrored from the typed FKs during the transition; direct writes to
-        # the pair land with the permission-checked object picker in a later wave.
+        # Generic placement is mirrored from the typed FKs during the transition and exposed read-only;
+        # permissioned direct writes land with the drag/place flow in a later wave.
         read_only_fields = ["placed_content_type", "placed_object_id", "placed_label"]
 
     def update(self, instance, validated_data):

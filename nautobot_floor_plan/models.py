@@ -20,6 +20,7 @@ from nautobot_floor_plan.choices import (
     ObjectOrientationChoices,
     PlacementModeChoices,
 )
+from nautobot_floor_plan.placement import registry
 from nautobot_floor_plan.svg import FloorPlanSVG
 from nautobot_floor_plan.templatetags.seed_helpers import (
     render_axis_origin,
@@ -660,6 +661,27 @@ class FloorPlanTile(PrimaryModel):
         self._validate_installed_objects()
         self._validate_object_locations()
         self._validate_single_object_assignment()
+        self._validate_generic_placement()
+
+    def _validate_generic_placement(self):
+        """Validate a generic-only placed object (no typed FK): registered, resolvable, right location."""
+        if self._typed_object() is not None or self.placed_object_id is None:
+            return
+        obj = self.placed_object
+        if obj is None:
+            return  # dangling id is caught by the pairing constraint / referential checks
+        placement = registry.resolve(obj)
+        if placement is None:
+            raise ValidationError({"placed_content_type": f"{obj._meta.label} is not a registered placeable type."})
+        location = registry.resolve_location(obj)
+        if location is None:
+            raise ValidationError(
+                {"placed_object_id": f"{obj} has no resolvable Location; link it to a Device or set its site first."}
+            )
+        if location != self.floor_plan.location:
+            raise ValidationError(
+                {"placed_object_id": f"{obj} must belong to Location {self.floor_plan.location}, not {location}."}
+            )
 
     def _validate_freeform(self):
         """Validate freeform placement coordinates when present."""
