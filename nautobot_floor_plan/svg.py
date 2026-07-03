@@ -16,6 +16,8 @@ from nautobot.core.templatetags.helpers import fgcolor
 from nautobot.dcim.models import Device, PowerFeed, PowerPanel, Rack
 
 from nautobot_floor_plan.choices import AllocationTypeChoices, ObjectOrientationChoices, PlacementModeChoices
+from nautobot_floor_plan.placement import registry
+from nautobot_floor_plan.placement.icons import ICON_VIEWBOX, glyph_paths
 from nautobot_floor_plan.templatetags.seed_helpers import render_axis_origin
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,14 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
     Y_LABEL_TEXT_OFFSET = 34
     # Fallback normalized footprint for a freeform object whose width/height are unset.
     DEFAULT_MARKER_FRAC = 0.04
+    # Per-type marker icon sizing and legend layout.
+    ICON_MIN = 18
+    ICON_MAX = 44
+    ICON_FOOTPRINT_FRAC = 0.55
+    CHIP_PAD = 4
+    LEGEND_ROW_H = 22
+    LEGEND_ICON = 14
+    LEGEND_WIDTH = 168
 
     def __init__(self, *, floor_plan, user, base_url, request=None):
         """
@@ -64,6 +74,7 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         self.user = user
         self.base_url = base_url.rstrip("/")
         self.request = request
+        self._present_types = {}
         self.add_url = self.base_url + reverse("plugins:nautobot_floor_plan:floorplantile_add")
         self.return_url = (
             reverse("plugins:nautobot_floor_plan:location_floor_plan_tab", kwargs={"pk": self.floor_plan.location.pk})
@@ -857,43 +868,95 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         image["data-bg-autofit"] = "true" if autofit else "false"
         drawing.add(image)
 
-    def _resolve_tile_object(self, tile):
-        """Return (obj, dcim_url_type, human_label, color) for the object on a tile, or None."""
-        candidates = (
-            (tile.rack, "rack", "Rack"),
-            (tile.device, "device", "Device"),
-            (tile.power_panel, "powerpanel", "Power Panel"),
-            (tile.power_feed, "powerfeed", "Power Feed"),
+    def _resolve_placement(self, tile):
+        """Return (obj, placement_type, color) for a tile's placed object, or None.
+
+        Prefers the generic ``placed_object``, falling back to the legacy typed FKs during transition.
+        ``placement_type`` is None when the object's type is not registered.
+        """
+        obj = tile.placed_object
+        if obj is None:
+            for candidate in (tile.rack, tile.device, tile.power_panel, tile.power_feed):
+                if candidate is not None:
+                    obj = candidate
+                    break
+        if obj is None:
+            return None
+        placement = registry.resolve(obj)
+        obj_status = getattr(obj, "status", None)
+        if obj_status is not None:
+            color = obj_status.color
+        elif placement is not None and placement.color:
+            color = placement.color
+        elif tile.status is not None:
+            color = tile.status.color
+        else:
+            color = "6c757d"
+        return obj, placement, color
+
+    def _placement_url(self, obj, placement):
+        """Build the absolute detail URL for a placed object via its registered resolver."""
+        try:
+            url = placement.url_resolver(obj) if placement is not None else obj.get_absolute_url()
+        except Exception:  # noqa: BLE001  pylint: disable=broad-except
+            url = None
+        if not url:
+            return "#"
+        return f"{self.base_url}{url}" if url.startswith("/") else url
+
+    def _draw_icon(self, drawing, parent, footprint, placement, color, center=(0, 0)):
+        """Draw a type glyph inside a legibility chip, centered at ``center`` within a marker group."""
+        size = max(self.ICON_MIN, min(self.ICON_MAX, footprint * self.ICON_FOOTPRINT_FRAC))
+        half = size / 2
+        pad = self.CHIP_PAD
+        cx, cy = center
+        parent.add(
+            drawing.rect(
+                insert=(cx - half - pad, cy - half - pad),
+                size=(size + 2 * pad, size + 2 * pad),
+                rx=self.CORNER_RADIUS,
+                class_="marker-icon-chip",
+            )
         )
-        for obj, url_type, label in candidates:
-            if obj is not None:
-                color = obj.status.color if hasattr(obj, "status") else tile.status.color
-                return obj, url_type, label, color
-        return None
+        glyph = drawing.g(class_="marker-icon-glyph")
+        glyph["transform"] = f"translate({cx - half},{cy - half}) scale({size / ICON_VIEWBOX})"
+        glyph["style"] = f"stroke: #{color}"
+        for path_def in glyph_paths(placement.icon if placement is not None else None):
+            glyph.add(drawing.path(d=path_def, fill="none"))
+        parent.add(glyph)
 
     def _draw_freeform_tile(self, drawing, tile):
-        """Render an object at its freeform (normalized, center-anchored) position with rotation."""
-        resolved = self._resolve_tile_object(tile)
+        """Render a placed object at its freeform (normalized, center-anchored) position with rotation."""
+        resolved = self._resolve_placement(tile)
         if resolved is None or tile.pos_x is None or tile.pos_y is None:
             return
-        obj, url_type, label, color = resolved
+        obj, placement, color = resolved
+        # Track present types (None = unregistered) so the legend can be built.
+        self._present_types[placement.key if placement is not None else None] = placement
+
         cx, cy, cw, ch = self.content_rect
         center_x = cx + tile.pos_x * cw
         center_y = cy + tile.pos_y * ch
         pw = (tile.width if tile.width is not None else self.DEFAULT_MARKER_FRAC) * cw
         ph = (tile.height if tile.height is not None else self.DEFAULT_MARKER_FRAC) * ch
         rotation = tile.rotation or 0
+        label = placement.label if placement is not None else obj._meta.verbose_name.title()
 
-        obj_url = f"{self.base_url}{reverse('dcim:' + url_type, kwargs={'pk': obj.pk})}"
-        link = drawing.add(drawing.a(href=obj_url, target="_top", id=f"{url_type}-{obj.pk}"))
-        # Children are drawn relative to the object center so a single transform on the group both
-        # positions and rotates the marker (the interactive layer rewrites only this transform).
+        link = drawing.add(
+            drawing.a(
+                href=self._placement_url(obj, placement),
+                target="_top",
+                id=f"{obj._meta.model_name}-{obj.pk}",
+            )
+        )
+        # Children are drawn relative to the object center so a single transform positions and rotates.
         group = drawing.g(class_="object")
         group["transform"] = f"translate({center_x},{center_y}) rotate({rotation})"
         group["data-tile-id"] = str(tile.pk)
         group["data-pos-x"] = tile.pos_x
         group["data-pos-y"] = tile.pos_y
         group["data-rotation"] = rotation
+        # Backing rect: status fill and drag target.
         group.add(
             drawing.rect(
                 insert=(-pw / 2, -ph / 2),
@@ -903,37 +966,86 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
                 style=f"fill: #{color}",
             )
         )
-        self._draw_freeform_text(drawing, group, obj, label, color)
+        icon_size = max(self.ICON_MIN, min(self.ICON_MAX, min(pw, ph) * self.ICON_FOOTPRINT_FRAC))
+        self._draw_icon(drawing, group, min(pw, ph), placement, color, center=(0, -icon_size * 0.15))
+        self._draw_freeform_text(drawing, group, obj, color, icon_size / 2 + self.TEXT_LINE_HEIGHT)
         link.add(group)
         link["data-tooltip"] = json.dumps(self._get_tooltip_data(obj, label))
         link["class"] = "object-tooltip"
 
-    def _draw_freeform_text(self, drawing, group, obj, label, color):
-        """Draw the object name and type centered on the freeform marker origin."""
+    def _draw_freeform_text(self, drawing, group, obj, color, y):
+        """Draw the placed object's name below the icon."""
+        name = getattr(obj, "name", None) or str(obj)
         group.add(
             drawing.text(
-                obj.name,
-                insert=(0, -self.TEXT_LINE_HEIGHT / 2),
+                name,
+                insert=(0, y),
                 class_="label-text-primary",
                 style=f"fill: {fgcolor(color)}",
             )
         )
-        group.add(
-            drawing.text(
-                label,
-                insert=(0, self.TEXT_LINE_HEIGHT),
-                class_="label-text",
-                style=f"fill: {fgcolor(color)}",
-            )
+
+    def _draw_legend(self, drawing, viewbox):
+        """Draw a legend of the placed types present, ordered by legend_order then label."""
+        entries = {}
+        for placement in self._present_types.values():
+            if placement is None:
+                entries["Unregistered"] = (10**9, "Unregistered", "help", "6c757d")
+            else:
+                entries[placement.label] = (
+                    placement.legend_order,
+                    placement.label,
+                    placement.icon,
+                    placement.color or "6c757d",
+                )
+        rows = sorted(entries.values())
+        if len(rows) < 2:
+            return
+        vx, vy, vw, vh = viewbox
+        height = len(rows) * self.LEGEND_ROW_H + 2 * self.CHIP_PAD
+        x0 = vx + 10
+        y0 = vy + vh - height - 10
+        drawing.add(
+            drawing.rect(insert=(x0, y0), size=(self.LEGEND_WIDTH, height), rx=self.CORNER_RADIUS, class_="legend-bg")
         )
+        for index, (_order, label, icon, color) in enumerate(rows):
+            row_cy = y0 + self.CHIP_PAD + index * self.LEGEND_ROW_H + self.LEGEND_ROW_H / 2
+            glyph = drawing.g(class_="marker-icon-glyph")
+            glyph["transform"] = f"translate({x0 + 10},{row_cy - self.LEGEND_ICON / 2}) scale({self.LEGEND_ICON / ICON_VIEWBOX})"
+            glyph["style"] = f"stroke: #{color}"
+            for path_def in glyph_paths(icon):
+                glyph.add(drawing.path(d=path_def, fill="none"))
+            drawing.add(glyph)
+            drawing.add(
+                drawing.text(label, insert=(x0 + 10 + self.LEGEND_ICON + 8, row_cy), class_="legend-label")
+            )
 
     def render(self):
         """Generate an SVG document representing a FloorPlan."""
         logger.debug("Setting up drawing...")
+        self._present_types = {}
         default_width = self.floor_plan.x_size * self.GRID_SIZE_X + self.GRID_OFFSET + self.BORDER_WIDTH * 2
         default_depth = self.floor_plan.y_size * self.GRID_SIZE_Y + self.GRID_OFFSET + self.BORDER_WIDTH * 2
         extents = self._drawing_extents(default_width, default_depth)
         drawing = self._setup_drawing(width=default_width, depth=default_depth, viewbox=extents)
+
+        # Fetch tiles once with related objects prefetched, so resolving each placed object (a generic
+        # foreign key) and its status doesn't trigger a per-tile query.
+        tiles = list(
+            self.floor_plan.tiles.select_related(
+                "status",
+                "rack_group",
+                "rack",
+                "rack__status",
+                "device",
+                "device__status",
+                "device__role",
+                "power_panel",
+                "power_feed",
+                "power_feed__status",
+                "placed_content_type",
+            ).prefetch_related("placed_object")
+        )
 
         # 1. Blueprint first, so it sits behind grid and tiles.
         self._draw_background_image(drawing)
@@ -941,7 +1053,7 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         # 2. Grid-geometry status/rackgroup underlays. Skip tiles rendered via the freeform path,
         #    otherwise a repositioned object leaves a ghost status box at its original grid cell.
         logger.debug("Rendering underlying rack_group and status tiles...")
-        for tile in self.floor_plan.tiles.all():
+        for tile in tiles:
             if self._is_freeform_tile(tile):
                 continue
             self._draw_underlay_tiles(drawing, tile)
@@ -953,11 +1065,14 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
 
         # 4. Object tiles: freeform-positioned where available, grid otherwise.
         logger.debug("Rendering tiles...")
-        for tile in self.floor_plan.tiles.all():
+        for tile in tiles:
             if self._is_freeform_tile(tile):
                 self._draw_freeform_tile(drawing, tile)
             else:
                 self._draw_tile(drawing, tile)
+
+        # 5. Legend of the placed types present (drawn last so it sits on top).
+        self._draw_legend(drawing, extents)
 
         logger.debug("Drawing rendered!")
         return drawing

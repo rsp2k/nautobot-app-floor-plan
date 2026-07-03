@@ -186,3 +186,37 @@ svg[data-ui-mode="calibrate"] #blueprint-image {
     pointer-events: auto;
     cursor: move;
 }
+
+/* Per-type marker icons and legend (dark). */
+.marker-icon-chip {
+    fill: rgba(26, 30, 36, 0.85);
+    stroke: none;
+}
+
+.marker-icon-glyph {
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.legend-bg {
+    fill: rgba(26, 30, 36, 0.92);
+    stroke: #555;
+    stroke-width: 1;
+}
+
+.legend-label {
+    text-anchor: start;
+    dominant-baseline: middle;
+    font-size: 12px;
+    fill: #e6e6e6;
+}
+
+/* Halo so marker names stay legible over a busy blueprint (dark). */
+.label-text-primary {
+    paint-order: stroke;
+    stroke: #1a1e24;
+    stroke-width: 2.5px;
+    stroke-linejoin: round;
+}

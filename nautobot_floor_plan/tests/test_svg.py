@@ -3,15 +3,19 @@
 from unittest.mock import ANY, MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from django.urls import reverse
 from nautobot.dcim.models import Device, PowerFeed, PowerPanel, Rack, RackGroup
+from nautobot.extras.models import Role
+from nautobot.tenancy.models import Tenant
 from nautobot.users.models import Token
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from nautobot_floor_plan import models, svg
 from nautobot_floor_plan.choices import ObjectOrientationChoices, PlacementModeChoices
+from nautobot_floor_plan.placement.icons import ICON_GLYPHS
 from nautobot_floor_plan.tests import fixtures
 from nautobot_floor_plan.tests.fixtures import create_prerequisites
 
@@ -303,10 +307,10 @@ class FloorPlanSVGTestCase(TestCase):
         # Setup
         mock_drawing = MagicMock()
 
-        # Mock tiles
+        # Mock tiles (render fetches them via a select_related().prefetch_related() chain).
         mock_tile1 = MagicMock()
         mock_tile2 = MagicMock()
-        self.floor_plan.tiles.all.return_value = [mock_tile1, mock_tile2]
+        self.floor_plan.tiles.select_related.return_value.prefetch_related.return_value = [mock_tile1, mock_tile2]
 
         # Mock methods called by render
         self.svg._drawing_extents = MagicMock(return_value=(0, 0, 796, 796))
@@ -315,6 +319,7 @@ class FloorPlanSVGTestCase(TestCase):
         self.svg._draw_underlay_tiles = MagicMock()
         self.svg._draw_grid = MagicMock()
         self.svg._draw_tile = MagicMock()
+        self.svg._draw_legend = MagicMock()
 
         # Call method
         result = self.svg.render()
@@ -661,3 +666,100 @@ class FloorPlanBlueprintSVGTests(TestCase):
         # content_w = 5 * 150 = 750; center = 26 + 0.5 * 750 = 401.
         self.assertIn("translate(401.0,401.0)", svg_str)
         self.assertIn("data-tile-id", svg_str)
+
+
+class FloorPlanIconRenderingTests(TestCase):
+    """Wave G2: per-type marker icons, Device-role variants, fallback, and legend."""
+
+    def setUp(self):
+        """Set up prerequisites and a freeform plan."""
+        data = create_prerequisites(floor_count=1)
+        self.status = data["status"]
+        self.device_type = data["device_type"]
+        self.device_role = data["device_role"]
+        self.floor = data["floors"][0]
+        self.user = User.objects.create(username="iconuser", is_superuser=True)
+        self.plan = models.FloorPlan.objects.create(
+            location=self.floor,
+            x_size=6,
+            y_size=6,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        self._next_cell = 1
+
+    def _place(self, **fields):
+        """Create a freeform tile placing an object at the next free grid cell."""
+        tile = models.FloorPlanTile(
+            floor_plan=self.plan,
+            status=self.status,
+            x_origin=self._next_cell,
+            y_origin=1,
+            pos_x=0.5,
+            pos_y=0.5,
+            width=0.12,
+            height=0.12,
+            **fields,
+        )
+        tile.validated_save()
+        self._next_cell += 1
+        return tile
+
+    def _render(self):
+        return self.plan.get_svg(user=self.user, base_url="http://testserver").tostring()
+
+    def test_rack_marker_renders_icon_and_chip(self):
+        """A placed rack renders an icon glyph inside a chip."""
+        self._place(rack=Rack.objects.create(name="IconRack", status=self.status, location=self.floor))
+        svg_str = self._render()
+        self.assertIn('class="marker-icon-glyph"', svg_str)
+        self.assertIn('class="marker-icon-chip"', svg_str)
+        # The rack glyph uses the "server" icon.
+        self.assertIn(ICON_GLYPHS["server"][0], svg_str)
+
+    def test_device_role_variant_icon(self):
+        """A device whose role reads as a camera renders the camera glyph; unmapped roles fall back."""
+        camera_role = Role.objects.create(name="Security Camera")
+        camera_role.content_types.add(ContentType.objects.get_for_model(Device))
+        camera = Device.objects.create(
+            name="Cam1", status=self.status, device_type=self.device_type, role=camera_role, location=self.floor
+        )
+        self._place(device=camera)
+        svg_str = self._render()
+        self.assertIn(ICON_GLYPHS["camera"][1], svg_str)  # camera lens path
+
+        # A device with the generic prerequisite role (unmapped) uses the base "cpu" glyph.
+        plain = Device.objects.create(
+            name="Dev1", status=self.status, device_type=self.device_type, role=self.device_role, location=self.floor
+        )
+        self._place(device=plain)
+        self.assertIn(ICON_GLYPHS["cpu"][0], self._render())
+
+    def test_unregistered_type_renders_fallback_without_error(self):
+        """A placed object of an unregistered type renders the help glyph and does not 500."""
+        tenant = Tenant.objects.create(name="Acme")
+        tile = models.FloorPlanTile(
+            floor_plan=self.plan,
+            status=self.status,
+            x_origin=self._next_cell,
+            y_origin=1,
+            pos_x=0.5,
+            pos_y=0.5,
+            width=0.1,
+            height=0.1,
+            placed_content_type=ContentType.objects.get_for_model(Tenant),
+            placed_object_id=tenant.pk,
+        )
+        tile.validated_save()
+        svg_str = self._render()
+        self.assertIn(ICON_GLYPHS["help"][0], svg_str)
+
+    def test_legend_shown_for_multiple_types_and_suppressed_for_one(self):
+        """The legend appears only when two or more distinct types are present."""
+        self._place(rack=Rack.objects.create(name="LegRack", status=self.status, location=self.floor))
+        self.assertNotIn('class="legend-bg"', self._render())  # single type
+
+        panel = PowerPanel.objects.create(name="LegPanel", location=self.floor)
+        self._place(power_panel=panel)
+        self.assertIn('class="legend-bg"', self._render())  # two types
