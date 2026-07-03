@@ -1,12 +1,15 @@
 """Test FloorPlan."""
 
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from nautobot.core.testing import TestCase
 from nautobot.dcim.models import Device, Location, PowerFeed, PowerPanel, Rack, RackGroup
+from nautobot.extras.models import Status
 
 from nautobot_floor_plan import models
 from nautobot_floor_plan.choices import ObjectOrientationChoices, PlacementModeChoices
+from nautobot_floor_plan.placement import registry
 from nautobot_floor_plan.tests import fixtures
 
 
@@ -934,9 +937,7 @@ class TestFreeformPlacement(TestCase):
     def test_pos_out_of_range_rejected(self):
         """pos_x/pos_y outside 0..1 fail validation."""
         plan = self._grid_plan(placement_mode=PlacementModeChoices.FREEFORM)
-        tile = models.FloorPlanTile(
-            floor_plan=plan, x_origin=1, y_origin=1, status=self.status, pos_x=1.5, pos_y=0.5
-        )
+        tile = models.FloorPlanTile(floor_plan=plan, x_origin=1, y_origin=1, status=self.status, pos_x=1.5, pos_y=0.5)
         with self.assertRaises(ValidationError):
             tile.validated_save()
 
@@ -999,3 +1000,72 @@ class TestFreeformPlacement(TestCase):
         models.FloorPlanTile(
             floor_plan=free_plan, x_origin=2, y_origin=1, status=self.status, rack=rack_d
         ).validated_save()
+
+
+class TestGenericPlacement(TestCase):
+    """Test the generic placement pair mirrored from the legacy typed FKs (Wave G1)."""
+
+    def setUp(self):
+        """Set up a plan and prerequisites."""
+        prerequisites = fixtures.create_prerequisites(floor_count=2)
+        self.status = prerequisites["status"]
+        self.floors = prerequisites["floors"]
+        self.plan = models.FloorPlan.objects.create(
+            location=self.floors[0], x_size=5, y_size=5, x_origin_seed=1, y_origin_seed=1
+        )
+
+    def test_typed_fk_mirrors_to_generic_pair_and_label(self):
+        """Saving a tile with a typed FK populates the generic pair and the display label."""
+        rack = Rack.objects.create(name="MirrorRack", status=self.status, location=self.floors[0])
+        tile = models.FloorPlanTile(floor_plan=self.plan, x_origin=1, y_origin=1, status=self.status, rack=rack)
+        tile.validated_save()
+        tile.refresh_from_db()
+        self.assertEqual(tile.placed_content_type, ContentType.objects.get_for_model(Rack))
+        self.assertEqual(tile.placed_object_id, rack.pk)
+        self.assertEqual(tile.placed_object, rack)
+        self.assertEqual(tile.placed_label, "MirrorRack")
+
+    def test_for_object_reverse_lookup(self):
+        """objects.for_object() finds the placing tile, and is empty for None/unsaved objects."""
+        rack = Rack.objects.create(name="LookupRack", status=self.status, location=self.floors[0])
+        tile = models.FloorPlanTile(floor_plan=self.plan, x_origin=2, y_origin=1, status=self.status, rack=rack)
+        tile.validated_save()
+        self.assertEqual(models.FloorPlanTile.objects.for_object(rack).first(), tile)
+        self.assertFalse(models.FloorPlanTile.objects.for_object(None).exists())
+        self.assertFalse(models.FloorPlanTile.objects.for_object(Rack(name="Unsaved", status=self.status)).exists())
+
+    def test_status_only_tile_has_null_generic_pair(self):
+        """A tile with no object leaves the generic pair null (pairing constraint satisfied)."""
+        tile = models.FloorPlanTile(floor_plan=self.plan, x_origin=3, y_origin=1, status=self.status)
+        tile.validated_save()
+        tile.refresh_from_db()
+        self.assertIsNone(tile.placed_content_type)
+        self.assertIsNone(tile.placed_object_id)
+        self.assertEqual(tile.placed_label, "")
+
+
+class TestPlacementRegistry(TestCase):
+    """Test the placeable-type registry (Wave G1)."""
+
+    def test_builtins_are_registered(self):
+        """The four native DCIM types resolve to a PlacementType."""
+        placement = registry.resolve(Rack())
+        self.assertIsNotNone(placement)
+        self.assertEqual(placement.label, "Rack")
+
+    def test_unregistered_type_resolves_to_none(self):
+        """An unregistered model resolves to None rather than raising."""
+        self.assertIsNone(registry.resolve(Status()))
+
+    def test_duplicate_registration_is_noop(self):
+        """Re-registering an existing type without replace=True does not overwrite it."""
+        original = registry.resolve(Rack()).label
+        registry.register("dcim.rack", label="SHOULD-NOT-STICK")
+        self.assertEqual(registry.resolve(Rack()).label, original)
+
+    def test_resolve_location_uses_registered_resolver(self):
+        """The registry resolves an object's Location via its registered resolver."""
+        prerequisites = fixtures.create_prerequisites(floor_count=1)
+        floor = prerequisites["floors"][0]
+        rack = Rack.objects.create(name="RegLocRack", status=prerequisites["status"], location=floor)
+        self.assertEqual(registry.resolve_location(rack), floor)

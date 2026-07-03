@@ -57,11 +57,16 @@ class FloorPlanConfig(NautobotAppConfig):
         """Callback after app is loaded."""
         super().ready()
 
+        from .placement.defaults import register_builtins  # pylint: disable=import-outside-toplevel
         from .signals import (  # pylint: disable=import-outside-toplevel
             post_migrate_create__add_statuses,
         )
 
         post_migrate.connect(post_migrate_create__add_statuses, sender=self)
+
+        # Register the native placeable types (rack/device/power panel/power feed). Other apps push
+        # their own registrations from their ready(); floor-plan never imports them.
+        register_builtins()
 
         self.validate_config_options()
 

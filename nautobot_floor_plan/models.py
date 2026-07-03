@@ -4,10 +4,13 @@ import logging
 import math
 from dataclasses import dataclass
 
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from nautobot.apps.models import PrimaryModel, StatusField, extras_features
+from nautobot.core.models.querysets import RestrictedQuerySet
 
 from nautobot_floor_plan.choices import (
     ORIENTATION_TO_DEGREES,
@@ -373,6 +376,17 @@ class FloorPlanCustomAxisLabel(models.Model):
                 self.floor_plan.y_origin_seed = 1
 
 
+class FloorPlanTileQuerySet(RestrictedQuerySet):
+    """QuerySet adding a generic reverse lookup for placed objects."""
+
+    def for_object(self, obj):
+        """Return the tile(s) placing a given object (via the generic placement pair)."""
+        if obj is None or obj.pk is None:
+            return self.none()
+        content_type = ContentType.objects.get_for_model(obj)
+        return self.filter(placed_content_type=content_type, placed_object_id=obj.pk)
+
+
 @extras_features(
     "custom_fields",
     # "custom_links",  Not really needed since this doesn't have distinct views.
@@ -442,6 +456,25 @@ class FloorPlanTile(PrimaryModel):
         related_name="rack_groups",
     )
 
+    # Generic placement target: lets a tile place ANY object type, not just the four typed FKs above.
+    # The typed FKs remain the write path during the transition and are mirrored into this pair.
+    # on_delete=CASCADE (not PROTECT) so a removed ContentType (e.g. an uninstalled app) doesn't block
+    # `remove_stale_contenttypes`; the orphaned tile is cleaned up with it.
+    placed_content_type = models.ForeignKey(
+        to="contenttypes.ContentType",
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        related_name="floor_plan_tiles",
+    )
+    placed_object_id = models.UUIDField(blank=True, null=True, db_index=True)
+    placed_object = GenericForeignKey("placed_content_type", "placed_object_id")
+    # Denormalized display for the placed object, kept in sync on save. Enables sorting/searching a
+    # table of heterogeneous placed types without joining arbitrary target tables.
+    placed_label = models.CharField(max_length=255, blank=True, db_index=True)
+
+    objects = models.Manager.from_queryset(FloorPlanTileQuerySet)()
+
     object_orientation = models.CharField(
         max_length=10,
         choices=ObjectOrientationChoices,
@@ -497,7 +530,19 @@ class FloorPlanTile(PrimaryModel):
                 name="floorplantile_origin_pairing",
                 check=models.Q(x_origin__isnull=False, y_origin__isnull=False)
                 | models.Q(x_origin__isnull=True, y_origin__isnull=True),
-            )
+            ),
+            models.CheckConstraint(
+                name="floorplantile_placed_object_pairing",
+                check=models.Q(placed_content_type__isnull=False, placed_object_id__isnull=False)
+                | models.Q(placed_content_type__isnull=True, placed_object_id__isnull=True),
+            ),
+            # A given object may sit on at most one tile. Plain (not partial) unique constraint so it
+            # is portable to MySQL; NULLs are distinct on both backends, so multiple object-less
+            # (rackgroup/status) tiles coexist.
+            models.UniqueConstraint(
+                fields=["placed_content_type", "placed_object_id"],
+                name="floorplantile_unique_placed_object",
+            ),
         ]
 
     def allocation_type_assignment(self):
@@ -514,6 +559,43 @@ class FloorPlanTile(PrimaryModel):
         # Ensure new tiles with just a status get an allocation type
         if not self.allocation_type and self.status:
             self.allocation_type = AllocationTypeChoices.RACKGROUP
+
+    def _typed_object(self):
+        """Return the object held by a legacy typed FK, if any (rack/device/power panel/feed)."""
+        for obj in (self.rack, self.device, self.power_panel, self.power_feed):
+            if obj is not None:
+                return obj
+        return None
+
+    def _has_placed_object(self):
+        """Whether this tile places an object, via either a typed FK or the generic pair."""
+        return self.placed_object_id is not None or self._typed_object() is not None
+
+    def _sync_placed_object_from_typed(self):
+        """Mirror a set legacy typed FK into the generic placement pair.
+
+        During the transition the typed FK is the write path; this keeps the generic pair (and its
+        uniqueness guarantee) consistent. Generic-only placement is managed directly by later waves.
+        """
+        typed = self._typed_object()
+        if typed is not None:
+            self.placed_content_type = ContentType.objects.get_for_model(typed)
+            self.placed_object_id = typed.pk
+
+    def _update_placed_label(self):
+        """Refresh the denormalized display label for the placed object."""
+        obj = self._typed_object() or self.placed_object
+        if obj is None:
+            self.placed_label = ""
+            return
+        name = getattr(obj, "name", None) or str(obj)
+        self.placed_label = str(name)[:255]
+
+    def save(self, *args, **kwargs):
+        """Keep the generic placement pair and display label in sync on every save."""
+        self._sync_placed_object_from_typed()
+        self._update_placed_label()
+        super().save(*args, **kwargs)
 
     def validate_tile_placement(self):
         """Check that tile fits within the floorplan."""
