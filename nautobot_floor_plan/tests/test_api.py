@@ -1,9 +1,11 @@
 """Unit tests for nautobot_floor_plan."""
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from django.urls import reverse
 from nautobot.dcim.models import Rack
+from nautobot.tenancy.models import Tenant
 from nautobot.users.models import Token
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -103,3 +105,108 @@ class FreeformAPITest(TestCase):
         # A second call seeds nothing.
         second = self.client.post(url, {}, format="json")
         self.assertEqual(second.json()["tiles_seeded"], 0)
+
+
+class PlacementAPITest(TestCase):
+    """Test the writable place endpoint, placeable-types, and the calibration fast path (Wave D step 1)."""
+
+    def setUp(self):
+        """Create a superuser client, a freeform plan, and a placeable rack."""
+        self.user = User.objects.create(username="placeapi", is_superuser=True)
+        self.token = Token.objects.create(user=self.user)
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+
+        data = fixtures.create_prerequisites(floor_count=2)
+        self.status = data["status"]
+        self.floor = data["floors"][0]
+        self.other_floor = data["floors"][1]
+        self.plan = models.FloorPlan.objects.create(
+            location=self.floor,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        self.rack = Rack.objects.create(name="PlaceRack", status=self.status, location=self.floor)
+        self.rack_ct = ContentType.objects.get_for_model(Rack)
+        self.place_url = reverse("plugins-api:nautobot_floor_plan-api:floorplantile-place")
+
+    def _payload(self, **overrides):
+        payload = {
+            "floor_plan": str(self.plan.pk),
+            "placed_content_type": self.rack_ct.pk,
+            "placed_object_id": str(self.rack.pk),
+            "pos_x": 0.5,
+            "pos_y": 0.5,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_place_happy_path(self):
+        """Placing a registered object creates a pure-freeform object tile."""
+        response = self.client.post(self.place_url, self._payload(), format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        tile = models.FloorPlanTile.objects.get(pk=response.json()["id"])
+        self.assertEqual(tile.placed_object, self.rack)
+        self.assertIsNone(tile.x_origin)
+        self.assertEqual(tile.allocation_type, "object")
+        self.assertEqual(tile.placed_label, "PlaceRack")
+
+    def test_place_wrong_location_rejected(self):
+        """Placing an object from another location is rejected."""
+        elsewhere = Rack.objects.create(name="OtherRack", status=self.status, location=self.other_floor)
+        response = self.client.post(
+            self.place_url, self._payload(placed_object_id=str(elsewhere.pk)), format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("placed_object_id", response.json())
+
+    def test_place_unregistered_type_rejected(self):
+        """An unregistered content type is rejected at the content-type field."""
+        tenant = Tenant.objects.create(name="AcmeCorp")
+        response = self.client.post(
+            self.place_url,
+            self._payload(
+                placed_content_type=ContentType.objects.get_for_model(Tenant).pk, placed_object_id=str(tenant.pk)
+            ),
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("placed_content_type", response.json())
+
+    def test_place_already_placed_rejected(self):
+        """Placing an already-placed object is rejected, not a 500."""
+        self.client.post(self.place_url, self._payload(), format="json")
+        response = self.client.post(self.place_url, self._payload(), format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("placed_object_id", response.json())
+
+    def test_place_position_out_of_range_rejected(self):
+        """An out-of-range position is a field-anchored 400."""
+        response = self.client.post(self.place_url, self._payload(pos_x=1.5), format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("pos_x", response.json())
+
+    def test_placeable_types(self):
+        """The placeable-types endpoint returns registered types sorted, scoped to the plan location."""
+        url = reverse(
+            "plugins-api:nautobot_floor_plan-api:floorplan-placeable-types", kwargs={"pk": self.plan.pk}
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        rows = response.json()["placeable_types"]
+        keys = [row["key"] for row in rows]
+        self.assertIn("dcim.rack", keys)
+        self.assertLess(keys.index("dcim.rack"), keys.index("dcim.device"))  # legend_order 10 < 20
+        power_feed = next(row for row in rows if row["key"] == "dcim.powerfeed")
+        self.assertIn("power_panel__location", power_feed["object_source"]["params"])
+
+    def test_calibration_fast_path(self):
+        """A calibration-only PATCH on the plan persists without full validation."""
+        url = reverse("plugins-api:nautobot_floor_plan-api:floorplan-detail", kwargs={"pk": self.plan.pk})
+        response = self.client.patch(url, {"bg_x": 0.1, "bg_y": 0.2}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        self.plan.refresh_from_db()
+        self.assertAlmostEqual(self.plan.bg_x, 0.1)

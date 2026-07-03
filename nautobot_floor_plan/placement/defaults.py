@@ -56,6 +56,7 @@ def register_builtins():
         icon="plug",
         color="ffc107",
         location_resolver=_power_feed_location,
+        location_field="power_panel__location",
         legend_order=40,
     )
 

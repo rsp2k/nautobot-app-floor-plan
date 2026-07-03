@@ -8,10 +8,20 @@ from drf_spectacular.utils import extend_schema
 from nautobot.apps.api import NautobotModelViewSet
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.status import HTTP_201_CREATED
 
 from nautobot_floor_plan import filters, models
 from nautobot_floor_plan.api import serializers
 from nautobot_floor_plan.choices import PlacementModeChoices
+from nautobot_floor_plan.placement import registry
+
+
+def _object_source_for(placement, location):
+    """Describe where the picker fetches eligible objects of a type, scoped to a location."""
+    return {
+        "content_type": placement.key,
+        "params": {placement.location_field: str(location.pk)},
+    }
 
 
 class FloorPlanViewSet(NautobotModelViewSet):  # pylint: disable=too-many-ancestors
@@ -60,6 +70,28 @@ class FloorPlanViewSet(NautobotModelViewSet):  # pylint: disable=too-many-ancest
             }
         )
 
+    @extend_schema(responses={200: serializers.PlaceableTypeSerializer(many=True)})
+    @action(detail=True, url_path="placeable-types")
+    def placeable_types(self, request, *, pk):
+        """List the object types that can be placed on this plan, scoped to its location."""
+        floor_plan = get_object_or_404(self.queryset.restrict(request.user, "view"), pk=pk)
+        rows = [
+            {
+                "key": placement.key,
+                "content_type": placement.key,
+                "label": placement.label,
+                "icon": placement.icon,
+                "color": placement.color,
+                "legend_order": placement.legend_order,
+                "object_source": _object_source_for(placement, floor_plan.location),
+            }
+            for placement in registry.base_types()
+        ]
+        rows.sort(key=lambda row: (row["legend_order"], row["label"]))
+        return Response(
+            {"floor_plan": floor_plan.pk, "location": floor_plan.location.pk, "placeable_types": rows}
+        )
+
 
 class FloorPlanTileViewSet(NautobotModelViewSet):
     """FloorPlanTile viewset."""
@@ -67,3 +99,18 @@ class FloorPlanTileViewSet(NautobotModelViewSet):
     queryset = models.FloorPlanTile.objects.all()
     serializer_class = serializers.FloorPlanTileSerializer
     filterset_class = filters.FloorPlanTileFilterSet
+
+    @extend_schema(
+        request=serializers.FloorPlanTilePlacementSerializer,
+        responses={201: serializers.FloorPlanTileSerializer},
+    )
+    @action(detail=False, methods=["post"])
+    def place(self, request):
+        """Place any registered object type on a floor plan at a normalized position."""
+        serializer = serializers.FloorPlanTilePlacementSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        tile = serializer.save()
+        return Response(
+            serializers.FloorPlanTileSerializer(tile, context={"request": request}).data,
+            status=HTTP_201_CREATED,
+        )

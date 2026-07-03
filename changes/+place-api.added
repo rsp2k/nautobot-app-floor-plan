@@ -1,0 +1,1 @@
+Added a REST place endpoint that positions any registered object type on a floor plan at a normalized coordinate, a placeable-types endpoint to drive an object picker, and a calibration fast-path so blueprint dragging persists without full revalidation.

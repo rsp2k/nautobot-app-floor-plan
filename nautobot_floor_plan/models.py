@@ -556,6 +556,9 @@ class FloorPlanTile(PrimaryModel):
             self.allocation_type = AllocationTypeChoices.RACKGROUP
         if any([self.rack, self.device, self.power_panel, self.power_feed]):
             self.allocation_type = AllocationTypeChoices.OBJECT
+        # A generic placement (no typed FK) is still an object tile.
+        if self.placed_object_id is not None and self._typed_object() is None:
+            self.allocation_type = AllocationTypeChoices.OBJECT
 
         # Ensure new tiles with just a status get an allocation type
         if not self.allocation_type and self.status:

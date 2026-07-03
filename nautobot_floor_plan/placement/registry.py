@@ -36,6 +36,9 @@ class PlacementType:
     url_resolver: Callable = field(default=_default_url)
     tooltip_builder: Optional[Callable] = None
     legend_order: int = 100
+    # ORM path from the object to its Location, used to build the picker's location filter param.
+    # Keep consistent with location_resolver so eligibility and validation agree.
+    location_field: str = "location"
 
 
 @dataclass
@@ -70,6 +73,7 @@ class PlacementRegistry:
         url_resolver=None,
         tooltip_builder=None,
         legend_order=100,
+        location_field="location",
         replace=False,
     ):
         """Register a placeable type by its dotted ``app_label.model`` label."""
@@ -86,6 +90,7 @@ class PlacementRegistry:
             url_resolver=url_resolver or _default_url,
             tooltip_builder=tooltip_builder,
             legend_order=legend_order,
+            location_field=location_field,
         )
         self._entries[key] = _Entry(base=placement)
         return placement
@@ -106,6 +111,7 @@ class PlacementRegistry:
             url_resolver=base.url_resolver,
             tooltip_builder=base.tooltip_builder,
             legend_order=legend_order,
+            location_field=base.location_field,
         )
 
     def set_discriminator(self, model_label, discriminator):
@@ -151,6 +157,10 @@ class PlacementRegistry:
     def model_labels(self):
         """All registered dotted model labels."""
         return list(self._entries)
+
+    def base_types(self):
+        """The base PlacementType for every registered content type (excludes role variants)."""
+        return [entry.base for entry in self._entries.values()]
 
     def allowed_content_types(self):
         """A ContentType queryset covering all registered types (empty if none resolve)."""
