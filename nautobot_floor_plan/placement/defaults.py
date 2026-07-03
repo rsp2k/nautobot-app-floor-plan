@@ -32,6 +32,26 @@ def _power_feed_location(power_feed):
     return power_feed.power_panel.location if power_feed.power_panel_id else None
 
 
+def _location_parent(location):
+    """Place a Location on its PARENT's plan (campus holds buildings, building holds floors)."""
+    return location.parent if location.parent_id else None
+
+
+def _location_floor_plan_url(location):
+    """Drill-down link: the Location's own floor plan tab (campus -> building -> floor)."""
+    from django.urls import reverse  # noqa: PLC0415  resolver runs at render time, not import time
+
+    return (
+        reverse("plugins:nautobot_floor_plan:location_floor_plan_tab", kwargs={"pk": location.pk})
+        + "?tab=nautobot_floor_plan:1"
+    )
+
+
+def _location_icon_variant(location):
+    """Containers (locations with children) vs leaves get distinct glyphs, inferred from the tree."""
+    return "container" if location.children.exists() else "leaf"
+
+
 def _device_role_variant(device):
     """Map a Device to an icon variant key based on its role name, or None for the base icon."""
     role = getattr(device, "role", None)
@@ -70,3 +90,24 @@ def register_builtins():
             legend_order=meta["legend_order"],
         )
     registry.set_discriminator("dcim.device", _device_role_variant)
+
+    # A Location placed on its parent's plan becomes a drill-down marker (campus -> building -> floor).
+    # It resolves its "location" to its parent and links to its own floor plan tab. Containers and
+    # leaves get distinct glyphs. legend_order below the DCIM types so containers head the legend.
+    registry.register(
+        "dcim.location",
+        label="Location",
+        icon="building",
+        color="0d6efd",
+        location_resolver=_location_parent,
+        location_field="parent",
+        url_resolver=_location_floor_plan_url,
+        legend_order=5,
+    )
+    registry.register_variant(
+        "dcim.location", "container", label="Building", icon="building", color="0d6efd", legend_order=5
+    )
+    registry.register_variant(
+        "dcim.location", "leaf", label="Floor / Room", icon="layers", color="6ea8fe", legend_order=6
+    )
+    registry.set_discriminator("dcim.location", _location_icon_variant)

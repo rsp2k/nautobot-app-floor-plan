@@ -3,6 +3,7 @@
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.urls import reverse
 from nautobot.core.testing import TestCase
 from nautobot.dcim.models import Device, Location, PowerFeed, PowerPanel, Rack, RackGroup
 from nautobot.extras.models import Status
@@ -1119,3 +1120,78 @@ class TestGenericPlacementValidation(TestCase):
         tile = self._generic_tile(rack)
         tile.validated_save()  # should not raise
         self.assertEqual(tile.placed_object, rack)
+
+
+class TestLocationPlacement(TestCase):
+    """Test placing a Location on its parent's floor plan as a drill-down marker (campus/building/floor)."""
+
+    def setUp(self):
+        """Build the Site -> Building -> Floor tree and a plan on the Building."""
+        prerequisites = fixtures.create_prerequisites(floor_count=2)
+        self.status = prerequisites["status"]
+        self.site = prerequisites["location"]  # top of the tree (no parent)
+        self.building = prerequisites["building"]  # parent = site
+        self.floors = prerequisites["floors"]  # parent = building
+        self.building_plan = models.FloorPlan.objects.create(
+            location=self.building,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+
+    def _tile(self, plan, obj):
+        return models.FloorPlanTile(
+            floor_plan=plan,
+            status=self.status,
+            x_origin=1,
+            y_origin=1,
+            pos_x=0.5,
+            pos_y=0.5,
+            placed_content_type=ContentType.objects.get_for_model(obj),
+            placed_object_id=obj.pk,
+        )
+
+    def test_location_is_registered_with_container_and_leaf_variants(self):
+        """A Location resolves to a placeable type; containers and leaves get distinct labels/icons."""
+        self.assertEqual(registry.resolve(self.building).label, "Building")  # has floor children
+        self.assertEqual(registry.resolve(self.building).icon, "building")
+        self.assertEqual(registry.resolve(self.floors[0]).label, "Floor / Room")  # leaf
+        self.assertEqual(registry.resolve(self.floors[0]).icon, "layers")
+
+    def test_location_resolves_to_its_parent(self):
+        """A Location's 'location' for placement is its parent; a top-level location has none."""
+        self.assertEqual(registry.resolve_location(self.floors[0]), self.building)
+        self.assertEqual(registry.resolve_location(self.building), self.site)
+        self.assertIsNone(registry.resolve_location(self.site))  # no parent -> not placeable
+
+    def test_url_resolver_points_at_child_floor_plan_tab(self):
+        """The marker's link drills into the placed Location's own floor plan tab."""
+        url = registry.resolve(self.floors[0]).url_resolver(self.floors[0])
+        expected = reverse("plugins:nautobot_floor_plan:location_floor_plan_tab", kwargs={"pk": self.floors[0].pk})
+        self.assertTrue(url.startswith(expected))
+
+    def test_place_child_location_on_parent_plan(self):
+        """A Floor (child) places on its Building's plan and validates."""
+        tile = self._tile(self.building_plan, self.floors[0])
+        tile.validated_save()  # should not raise
+        self.assertEqual(tile.placed_object, self.floors[0])
+
+    def test_location_on_non_parent_plan_rejected(self):
+        """A Floor cannot be placed on a plan whose Location is not the Floor's parent."""
+        site_plan = models.FloorPlan.objects.create(
+            location=self.site,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        with self.assertRaises(ValidationError):
+            self._tile(site_plan, self.floors[0]).validated_save()  # floor's parent is building, not site
+
+    def test_top_level_location_not_placeable(self):
+        """A top-level Location (no parent) has no resolvable place and is rejected."""
+        with self.assertRaises(ValidationError):
+            self._tile(self.building_plan, self.site).validated_save()
