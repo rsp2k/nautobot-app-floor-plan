@@ -27,3 +27,53 @@
 .tippy-box[data-theme~=light]>.tippy-svg-arrow {
     fill: #fff
 }
+/* ── Wave D: HTML edit-control chrome (screen-reader helper + place picker) ── */
+.sr-only {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.floor-plan-listbox {
+    position: absolute;
+    z-index: 1000;
+    left: 0;
+    right: 0;
+    max-height: 220px;
+    overflow-y: auto;
+    margin: 2px 0 0;
+    padding: 2px 0;
+    list-style: none;
+    background: #fff;
+    border: 1px solid #cfd6dd;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(36, 40, 47, 0.15);
+}
+.floor-plan-listbox li {
+    padding: 4px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.floor-plan-listbox li:hover,
+.floor-plan-listbox li[aria-selected="true"] {
+    background: #e7f5ff;
+}
+
+.floor-plan-legend-mirror {
+    margin-top: 6px;
+    font-size: 12px;
+}
+.floor-plan-legend-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}

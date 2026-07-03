@@ -233,6 +233,14 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         drawing["data-content-y"] = content_y
         drawing["data-content-w"] = content_w
         drawing["data-content-h"] = content_h
+        # A11y root semantics. role starts "group" so a reading screen-reader user keeps the virtual
+        # cursor over the marker labels; the JS mode machine swaps to role="application" in place/
+        # calibrate where Arrow keys must reach our handlers. No tabindex on the root: the single tab
+        # stop is the active roving marker (its <g> carries tabindex="0").
+        loc_name = getattr(getattr(self.floor_plan, "location", None), "name", "") or ""
+        drawing["role"] = "group"
+        drawing["aria-roledescription"] = "Floor plan"
+        drawing["aria-label"] = ("Floor plan for %s" % loc_name).strip()
 
         # Get theme from request cookies if available
         theme = self.request.COOKIES.get("theme", "light") if self.request else "light"
@@ -949,6 +957,9 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
                 id=f"{obj._meta.model_name}-{obj.pk}",
             )
         )
+        # The anchor is never a tab stop: roving focus lives on the inner <g role="button">. The href
+        # is retained for programmatic/view-mode navigation only (JS activates it explicitly on Enter).
+        link["tabindex"] = "-1"
         # Children are drawn relative to the object center so a single transform positions and rotates.
         group = drawing.g(class_="object")
         group["transform"] = f"translate({center_x},{center_y}) rotate({rotation})"
@@ -956,6 +967,12 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         group["data-pos-x"] = tile.pos_x
         group["data-pos-y"] = tile.pos_y
         group["data-rotation"] = rotation
+        # Roving-tabindex focusable + accessible name. tabindex="-1" by default; JS promotes the first
+        # marker in reading order to "0" so Tab lands on it, and moves it as the user arrows around.
+        group["role"] = "button"
+        group["tabindex"] = "-1"
+        group["aria-label"] = self._marker_aria_label(obj, label, tile)
+        group["data-can-move"] = "true"
         # Backing rect: status fill and drag target.
         group.add(
             drawing.rect(
@@ -969,6 +986,19 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         icon_size = max(self.ICON_MIN, min(self.ICON_MAX, min(pw, ph) * self.ICON_FOOTPRINT_FRAC))
         self._draw_icon(drawing, group, min(pw, ph), placement, color, center=(0, -icon_size * 0.15))
         self._draw_freeform_text(drawing, group, obj, color, icon_size / 2 + self.TEXT_LINE_HEIGHT)
+        # Hidden keyboard focus ring, revealed by JS toggling `.is-focused`. non-scaling-stroke keeps
+        # the outline a constant screen width at every zoom; drawn last so it renders on top.
+        ring_pad = min(pw, ph) * 0.12
+        focus_ring = drawing.rect(
+            insert=(-pw / 2 - ring_pad, -ph / 2 - ring_pad),
+            size=(pw + 2 * ring_pad, ph + 2 * ring_pad),
+            rx=self.CORNER_RADIUS,
+            class_="focus-ring",
+        )
+        focus_ring["vector-effect"] = "non-scaling-stroke"
+        focus_ring["aria-hidden"] = "true"
+        focus_ring["pointer-events"] = "none"
+        group.add(focus_ring)
         link.add(group)
         link["data-tooltip"] = json.dumps(self._get_tooltip_data(obj, label))
         link["class"] = "object-tooltip"
@@ -984,6 +1014,16 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
                 style=f"fill: {fgcolor(color)}",
             )
         )
+
+    def _marker_aria_label(self, obj, label, tile):
+        """Screen-reader name for a freeform marker, e.g. 'rack-01, Rack, Active status, at 62% 40%'."""
+        data = self._get_tooltip_data(obj, label)
+        parts = [data.get("Name") or str(obj), label]
+        status = data.get("Status")
+        if status:
+            parts.append(f"{status} status")
+        parts.append(f"at {round((tile.pos_x or 0) * 100)}% {round((tile.pos_y or 0) * 100)}%")
+        return ", ".join(str(p) for p in parts if p)
 
     def _draw_legend(self, drawing, viewbox):
         """Draw a legend of the placed types present, ordered by legend_order then label."""

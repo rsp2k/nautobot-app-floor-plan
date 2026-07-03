@@ -33,10 +33,17 @@ class FloorPlanVisualizationPanel(Panel):
         super().__init__(**kwargs)
 
     def get_extra_context(self, context):
-        """Add custom context for the visualization."""
+        """Add custom context for the visualization, including edit-permission flags."""
+        request = context.get("request")
+        user = getattr(request, "user", None)
+        can_place = bool(user and user.has_perm("nautobot_floor_plan.change_floorplantile"))
+        can_calibrate = bool(user and user.has_perm("nautobot_floor_plan.change_floorplan"))
         return {
             "zoom_duration": get_app_settings_or_config("nautobot_floor_plan", "zoom_duration"),
             "highlight_duration": get_app_settings_or_config("nautobot_floor_plan", "highlight_duration"),
+            # Gate the interactive edit UI (place/calibrate controls) on model permissions.
+            "can_place": can_place,
+            "can_calibrate": can_calibrate,
         }
 
 

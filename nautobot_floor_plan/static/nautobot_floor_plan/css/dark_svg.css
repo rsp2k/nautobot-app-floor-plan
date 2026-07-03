@@ -220,3 +220,70 @@ svg[data-ui-mode="calibrate"] #blueprint-image {
     stroke-width: 2.5px;
     stroke-linejoin: round;
 }
+/* ── Wave D: calibrate overlay + focus ring + touch/reduced-motion (dark) ── */
+svg[data-ui-mode="place"],
+svg[data-ui-mode="calibrate"] {
+    touch-action: none;
+}
+
+.calibrate-overlay {
+    pointer-events: none;
+}
+.calibrate-body {
+    pointer-events: fill;
+    fill: rgba(77, 171, 247, 0.08);
+    stroke: #4dabf7;
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    cursor: move;
+}
+.calibrate-handle {
+    pointer-events: all;
+    fill: #1a1e24;
+    stroke: #4dabf7;
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    cursor: pointer;
+}
+.calibrate-handle[data-corner="nw"],
+.calibrate-handle[data-corner="se"] {
+    cursor: nwse-resize;
+}
+.calibrate-handle[data-corner="ne"],
+.calibrate-handle[data-corner="sw"] {
+    cursor: nesw-resize;
+}
+.calibrate-rotate {
+    fill: #4dabf7;
+    stroke: #1a1e24;
+    cursor: grab;
+}
+.calibrate-rot-arm {
+    stroke: #4dabf7;
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
+}
+.calibrate-handle:focus-visible {
+    outline: 2px solid #4dabf7;
+    outline-offset: 2px;
+}
+
+.object .focus-ring {
+    display: none;
+    fill: none;
+    stroke: #4dabf7;
+    stroke-width: 2px;
+    vector-effect: non-scaling-stroke;
+}
+.object.is-focused .focus-ring {
+    display: inline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spotlight-effect,
+    .highlight-border,
+    .indicator-arrow {
+        animation: none !important;
+    }
+}

@@ -2,6 +2,8 @@
 {% load static %}
 
 {% if object %}
+{% with can_calibrate=perms.nautobot_floor_plan.change_floorplan can_place=perms.nautobot_floor_plan.add_floorplantile can_move=perms.nautobot_floor_plan.change_floorplantile %}
+{% with can_edit=can_calibrate|default:can_place %}
     <div class="float-end d-print-none">
         <a class="btn btn-warning btn-md" href="{% url 'plugins:nautobot_floor_plan:floorplan_edit' object.pk %}" id="edit-button">
             <span aria-hidden="true" class="mdi mdi-checkerboard"></span> Edit Floorplan
@@ -21,11 +23,91 @@
         <br/>
         Click on a Row's Label to see the Elevation for all Racks in the row.
     </div>
+
+    {% if can_edit %}
+    {% comment %}
+    Wave D interactive editing controls. Buttons ship disabled and panels hidden; the drag layer
+    (floorplan_editing.js) enables them once the SVG is mounted, so a page without JS is unchanged.
+    {% endcomment %}
+    <div class="floor-plan-edit-controls d-print-none" style="margin-top: 8px;">
+        <div class="btn-group" role="group" aria-label="Floor plan interaction mode" id="floor-plan-mode-group">
+            <button type="button" class="btn btn-sm btn-default active" id="mode-view" data-mode="view"
+                    aria-pressed="true" disabled aria-disabled="true">
+                <span aria-hidden="true" class="mdi mdi-cursor-default-outline"></span> View
+            </button>
+            {% if can_place %}
+            <button type="button" class="btn btn-sm btn-default" id="mode-place" data-mode="place"
+                    aria-pressed="false" disabled aria-disabled="true">
+                <span aria-hidden="true" class="mdi mdi-map-marker-plus-outline"></span> Place
+            </button>
+            {% endif %}
+            {% if can_calibrate and object.background_image %}
+            <button type="button" class="btn btn-sm btn-default" id="mode-calibrate" data-mode="calibrate"
+                    aria-pressed="false" disabled aria-disabled="true">
+                <span aria-hidden="true" class="mdi mdi-crop-rotate"></span> Calibrate
+            </button>
+            {% endif %}
+        </div>
+
+        {% if can_calibrate and object.background_image %}
+        <span class="floor-plan-opacity-control" style="margin-left: 12px; white-space: nowrap;">
+            <label for="blueprint-opacity-range" style="margin: 0 4px 0 0;">Blueprint opacity</label>
+            <input type="range" id="blueprint-opacity-range" min="0" max="100" step="1"
+                   value="{{ object.background_opacity|default:100 }}"
+                   aria-label="Blueprint opacity percentage" style="vertical-align: middle; width: 140px;">
+            <input type="number" id="blueprint-opacity-number" min="0" max="100" step="1"
+                   value="{{ object.background_opacity|default:100 }}"
+                   aria-label="Blueprint opacity percentage" style="width: 64px;">
+            <span aria-hidden="true">%</span>
+        </span>
+        {% endif %}
+    </div>
+
+    {% if can_place %}
+    <div class="floor-plan-place-panel d-print-none" id="place-object-panel" hidden
+         style="margin-top: 8px; padding: 8px; border: 1px solid var(--nb-border-color, #cfd6dd); border-radius: 6px;">
+        <div class="form-inline" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;">
+            <div>
+                <label for="place-type-select" style="display: block; margin: 0;">Type</label>
+                <select class="form-control input-sm" id="place-type-select" aria-label="Object type to place">
+                    <option value="">Loading types…</option>
+                </select>
+            </div>
+            <div style="position: relative;">
+                <label for="place-object-input" style="display: block; margin: 0;">Object</label>
+                <input type="text" class="form-control input-sm" id="place-object-input"
+                       role="combobox" aria-expanded="false" aria-autocomplete="list"
+                       aria-controls="place-object-listbox" autocomplete="off"
+                       placeholder="Search by name…" disabled>
+                <ul role="listbox" id="place-object-listbox" class="floor-plan-listbox" hidden
+                    aria-label="Matching objects"></ul>
+            </div>
+            <div>
+                <button type="button" class="btn btn-sm btn-primary" id="place-commit" disabled>
+                    <span aria-hidden="true" class="mdi mdi-map-marker-plus-outline"></span> Place object
+                </button>
+            </div>
+            <div class="text-muted" id="place-hint" style="flex-basis: 100%; font-size: 12px;">
+                Choose a type and object, then press <strong>Place object</strong>. It drops at the center of
+                the current view; drag it into position.
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+
     <div class="text-center">
         <a class="rack_elevation_save_svg_link" download="floor_plan_{{ object.location.name }}.svg" href="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-svg' pk=object.pk %}">
             <span class="mdi mdi-content-save-outline"></span> Save SVG
         </a>
     </div>
+
+    {% comment %}
+    Screen-reader channels: a polite live region for edit announcements and an HTML mirror of the
+    in-SVG legend (the in-SVG legend is aria-hidden; SVG <text> is not reliably navigable).
+    {% endcomment %}
+    <div id="floor-plan-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div id="floor-plan-legend" role="group" aria-label="Marker legend" class="floor-plan-legend-mirror d-print-none"></div>
 
     {% comment %}
     Add Tippy.js resources - using local files for air-gapped environments
@@ -36,6 +118,8 @@
     <script src="{% static 'nautobot_floor_plan/tippy.js-6.3.7/tippy-bundle.umd.min.js' %}"></script>
     <script src="{% static 'nautobot_floor_plan/js/floorplan.js' %}?v={% now 'U' %}"></script>
     <script src="{% static 'nautobot_floor_plan/gsap.js-3.12.2/gsap.min.js' %}"></script>
+    <script src="{% static 'nautobot_floor_plan/js/floorplan-coords.js' %}?v={% now 'U' %}"></script>
+    <script src="{% static 'nautobot_floor_plan/js/floorplan_editing.js' %}?v={% now 'U' %}"></script>
     <script>
         const ZOOM_DURATION = {{ zoom_duration }};
         const HIGHLIGHT_DURATION = {{ highlight_duration }};
@@ -47,8 +131,23 @@
     {% endcomment %}
     <div id="floor-plan-svg-container" style="position: relative; height: 0; width: 100%; padding: 0; padding-bottom: calc(100% * ({{ object.y_size }} * {{ object.tile_depth }}) / ({{ object.x_size }} * {{ object.tile_width }}) / 1.2);">
         <a id="zoom-anchor"></a>
-        <div data-floor-plan-x-size="{{ object.x_size }}" data-floor-plan-y-size="{{ object.y_size }}" data-svg-url="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-svg' pk=object.pk %}" id="floor-plan-svg" style="position: absolute; height: 100%; width: 100%; left: 0; top: 0;"></div>
+        <div data-floor-plan-x-size="{{ object.x_size }}"
+             data-floor-plan-y-size="{{ object.y_size }}"
+             data-svg-url="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-svg' pk=object.pk %}"
+             data-floorplan-id="{{ object.pk }}"
+             data-placement-mode="{{ object.placement_mode }}"
+             data-location-id="{{ object.location.pk }}"
+             data-can-edit="{{ can_edit|yesno:'true,false' }}"
+             data-can-move="{{ can_move|yesno:'true,false' }}"
+             data-can-calibrate="{{ can_calibrate|yesno:'true,false' }}"
+             data-tile-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplantile-list' %}"
+             data-floorplan-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-detail' pk=object.pk %}"
+             {% if can_place %}data-place-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplantile-place' %}" data-placeable-types-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-placeable-types' pk=object.pk %}"{% endif %}
+             {% if can_calibrate %}data-convert-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-convert-to-freeform' pk=object.pk %}"{% endif %}
+             id="floor-plan-svg" style="position: absolute; height: 100%; width: 100%; left: 0; top: 0;"></div>
     </div>
+{% endwith %}
+{% endwith %}
 {% else %}
     {% comment %}
     The UI should normally not even show the option to reach this view, but someone could enter it manually.
