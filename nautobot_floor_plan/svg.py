@@ -1,7 +1,10 @@
 """Render a FloorPlan as an SVG image."""
 
+import base64
 import json
 import logging
+import math
+import mimetypes
 import os
 from dataclasses import dataclass
 
@@ -12,7 +15,7 @@ from django.utils.http import urlencode
 from nautobot.core.templatetags.helpers import fgcolor
 from nautobot.dcim.models import Device, PowerFeed, PowerPanel, Rack
 
-from nautobot_floor_plan.choices import AllocationTypeChoices, ObjectOrientationChoices
+from nautobot_floor_plan.choices import AllocationTypeChoices, ObjectOrientationChoices, PlacementModeChoices
 from nautobot_floor_plan.templatetags.seed_helpers import render_axis_origin
 
 logger = logging.getLogger(__name__)
@@ -44,6 +47,8 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
     OBJECT_ORIENTATION_OFFSET = 14
     RACKGROUP_TEXT_OFFSET = 12
     Y_LABEL_TEXT_OFFSET = 34
+    # Fallback normalized footprint for a freeform object whose width/height are unset.
+    DEFAULT_MARKER_FRAC = 0.04
 
     def __init__(self, *, floor_plan, user, base_url, request=None):
         """
@@ -75,10 +80,148 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         """Grid spacing in the Y (depth) dimension."""
         return max(150, (150 * self.floor_plan.tile_depth) // self.floor_plan.tile_width)
 
-    def _setup_drawing(self, width, depth):
+    @property
+    def is_freeform(self):
+        """Whether this floor plan positions objects by freeform coordinates."""
+        return self.floor_plan.placement_mode == PlacementModeChoices.FREEFORM
+
+    def _is_freeform_tile(self, tile):
+        """A tile that should be rendered via the freeform path (positioned, in a freeform plan)."""
+        return self.is_freeform and tile.pos_x is not None and tile.pos_y is not None
+
+    @cached_property
+    def content_rect(self):
+        """The grid drawing area in SVG user units: (x, y, w, h).
+
+        This single rectangle is the normalization basis for both freeform object positions and the
+        blueprint calibration. It is always defined, independent of whether a blueprint is present.
+        """
+        return (
+            self.GRID_OFFSET,
+            self.GRID_OFFSET,
+            self.floor_plan.x_size * self.GRID_SIZE_X,
+            self.floor_plan.y_size * self.GRID_SIZE_Y,
+        )
+
+    @cached_property
+    def _background_data_uri(self):
+        """Base64 data URI for the blueprint image, or None.
+
+        Embedded (not URL-referenced) so the rendered SVG is self-contained for the "Save SVG"
+        download and cross-context fetch. This inflates the payload ~1.33x; upload size is bounded
+        by the form.
+        """
+        image = self.floor_plan.background_image
+        if not image:
+            return None
+        try:
+            with image.open("rb") as handle:
+                raw = handle.read()
+        except (OSError, ValueError) as error:
+            logger.warning("Could not read background image for %s: %s", self.floor_plan, error)
+            return None
+        mime = mimetypes.guess_type(image.name)[0] or "image/png"
+        encoded = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+
+    def _background_rect(self):
+        """Resolve the blueprint placement rectangle.
+
+        Returns (user_rect, norm_rect, autofit) where user_rect is (x, y, w, h) in SVG user units,
+        norm_rect is the same rectangle normalized to the content rect (always concrete numbers, even
+        when auto-fitting, so the calibrate overlay has a rectangle to attach to), and autofit is True
+        when the placement was derived rather than user-calibrated.
+        """
+        cx, cy, cw, ch = self.content_rect
+        fp = self.floor_plan
+        calibrated = None not in (fp.bg_x, fp.bg_y, fp.bg_width, fp.bg_height)
+        if calibrated:
+            norm = (fp.bg_x, fp.bg_y, fp.bg_width, fp.bg_height)
+        else:
+            norm = self._autofit_norm_rect(cw, ch)
+        nx, ny, nw, nh = norm
+        user_rect = (cx + nx * cw, cy + ny * ch, nw * cw, nh * ch)
+        return user_rect, norm, not calibrated
+
+    def _autofit_norm_rect(self, content_w, content_h):
+        """Aspect-correct letterbox of the image inside the content rect, normalized to it."""
+        img_w = self.floor_plan.background_image_width
+        img_h = self.floor_plan.background_image_height
+        if not img_w or not img_h or content_w <= 0 or content_h <= 0:
+            # Pixel dimensions unknown: fill the content rect (rendering falls back to a
+            # non-distorting preserveAspectRatio in that case).
+            return (0.0, 0.0, 1.0, 1.0)
+        content_aspect = content_w / content_h
+        img_aspect = img_w / img_h
+        if img_aspect > content_aspect:
+            # Image is relatively wider: full width, letterbox vertically.
+            nw, nh = 1.0, content_aspect / img_aspect
+            return (0.0, (1.0 - nh) / 2, nw, nh)
+        # Image is relatively taller: full height, pillarbox horizontally.
+        nw, nh = img_aspect / content_aspect, 1.0
+        return ((1.0 - nw) / 2, 0.0, nw, nh)
+
+    @staticmethod
+    def _rotated_bounds(x, y, w, h, degrees):
+        """Axis-aligned bounds (min_x, min_y, max_x, max_y) of a rectangle rotated about its center."""
+        if not degrees:
+            return (x, y, x + w, y + h)
+        cx, cy = x + w / 2, y + h / 2
+        rad = math.radians(degrees)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        xs, ys = [], []
+        for corner_x, corner_y in ((x, y), (x + w, y), (x + w, y + h), (x, y + h)):
+            dx, dy = corner_x - cx, corner_y - cy
+            xs.append(cx + dx * cos_a - dy * sin_a)
+            ys.append(cy + dx * sin_a + dy * cos_a)
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    def _drawing_extents(self, default_width, default_depth):
+        """Compute the viewBox (x, y, w, h) enclosing the grid frame, blueprint, and freeform markers.
+
+        With no blueprint and no freeform markers this returns exactly (0, 0, default_width,
+        default_depth), keeping grid-mode output identical to prior behavior.
+        """
+        min_x, min_y, max_x, max_y = 0.0, 0.0, float(default_width), float(default_depth)
+        expanded = False
+
+        if self._background_data_uri and self.floor_plan.background_opacity > 0:
+            (bx, by, bw, bh), _norm, _autofit = self._background_rect()
+            rb = self._rotated_bounds(bx, by, bw, bh, self.floor_plan.bg_rotation)
+            min_x, min_y = min(min_x, rb[0]), min(min_y, rb[1])
+            max_x, max_y = max(max_x, rb[2]), max(max_y, rb[3])
+            expanded = True
+
+        cx, cy, cw, ch = self.content_rect
+        for tile in self.floor_plan.tiles.all():
+            if not self._is_freeform_tile(tile):
+                continue
+            center_x = cx + tile.pos_x * cw
+            center_y = cy + tile.pos_y * ch
+            pw = (tile.width if tile.width is not None else self.DEFAULT_MARKER_FRAC) * cw
+            ph = (tile.height if tile.height is not None else self.DEFAULT_MARKER_FRAC) * ch
+            rb = self._rotated_bounds(center_x - pw / 2, center_y - ph / 2, pw, ph, tile.rotation or 0)
+            min_x, min_y = min(min_x, rb[0]), min(min_y, rb[1])
+            max_x, max_y = max(max_x, rb[2]), max(max_y, rb[3])
+            expanded = True
+
+        if expanded:
+            min_x, min_y = min_x - self.BORDER_WIDTH, min_y - self.BORDER_WIDTH
+            max_x, max_y = max_x + self.BORDER_WIDTH, max_y + self.BORDER_WIDTH
+        return (min_x, min_y, max_x - min_x, max_y - min_y)
+
+    def _setup_drawing(self, width, depth, viewbox=None):
         """Initialize an appropriate svgwrite.Drawing instance."""
-        drawing = svgwrite.Drawing(size=(width, depth), debug=False)
-        drawing.viewbox(0, 0, width=width, height=depth)
+        vx, vy, vw, vh = viewbox if viewbox is not None else (0, 0, width, depth)
+        # Intrinsic size matches the viewBox so the inline SVG is not letterbox-scaled before JS mounts.
+        drawing = svgwrite.Drawing(size=(vw, vh), debug=False)
+        drawing.viewbox(vx, vy, width=vw, height=vh)
+        # Publish the content rect so the interactive layer shares the server's normalization basis.
+        content_x, content_y, content_w, content_h = self.content_rect
+        drawing["data-content-x"] = content_x
+        drawing["data-content-y"] = content_y
+        drawing["data-content-w"] = content_w
+        drawing["data-content-h"] = content_h
 
         # Get theme from request cookies if available
         theme = self.request.COOKIES.get("theme", "light") if self.request else "light"
@@ -680,26 +823,141 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
             )
         )
 
+    def _draw_background_image(self, drawing):
+        """Embed the blueprint image behind the grid, honoring opacity and calibration."""
+        data_uri = self._background_data_uri
+        if data_uri is None or self.floor_plan.background_opacity <= 0:
+            return
+        (bx, by, bw, bh), norm, autofit = self._background_rect()
+        known_dims = bool(self.floor_plan.background_image_width and self.floor_plan.background_image_height)
+        image = drawing.image(
+            href=data_uri,
+            insert=(bx, by),
+            size=(bw, bh),
+            class_="background-image",
+            id="blueprint-image",
+        )
+        # A user-calibrated or aspect-correct auto-fit rect can safely stretch; a dimensionless image
+        # would distort, so preserve its aspect ratio instead.
+        if autofit and not known_dims:
+            image.fit(horiz="center", vert="middle", scale="meet")
+        else:
+            image.stretch()
+        image["opacity"] = self.floor_plan.background_opacity / 100.0
+        rotation = self.floor_plan.bg_rotation
+        if rotation:
+            image.rotate(rotation, center=(bx + bw / 2, by + bh / 2))
+        # Resolved normalized rectangle (always concrete) so the calibrate overlay has a target.
+        nx, ny, nw, nh = norm
+        image["data-bg-x"] = nx
+        image["data-bg-y"] = ny
+        image["data-bg-width"] = nw
+        image["data-bg-height"] = nh
+        image["data-bg-rotation"] = rotation
+        image["data-bg-autofit"] = "true" if autofit else "false"
+        drawing.add(image)
+
+    def _resolve_tile_object(self, tile):
+        """Return (obj, dcim_url_type, human_label, color) for the object on a tile, or None."""
+        candidates = (
+            (tile.rack, "rack", "Rack"),
+            (tile.device, "device", "Device"),
+            (tile.power_panel, "powerpanel", "Power Panel"),
+            (tile.power_feed, "powerfeed", "Power Feed"),
+        )
+        for obj, url_type, label in candidates:
+            if obj is not None:
+                color = obj.status.color if hasattr(obj, "status") else tile.status.color
+                return obj, url_type, label, color
+        return None
+
+    def _draw_freeform_tile(self, drawing, tile):
+        """Render an object at its freeform (normalized, center-anchored) position with rotation."""
+        resolved = self._resolve_tile_object(tile)
+        if resolved is None or tile.pos_x is None or tile.pos_y is None:
+            return
+        obj, url_type, label, color = resolved
+        cx, cy, cw, ch = self.content_rect
+        center_x = cx + tile.pos_x * cw
+        center_y = cy + tile.pos_y * ch
+        pw = (tile.width if tile.width is not None else self.DEFAULT_MARKER_FRAC) * cw
+        ph = (tile.height if tile.height is not None else self.DEFAULT_MARKER_FRAC) * ch
+        rotation = tile.rotation or 0
+
+        obj_url = f"{self.base_url}{reverse('dcim:' + url_type, kwargs={'pk': obj.pk})}"
+        link = drawing.add(drawing.a(href=obj_url, target="_top", id=f"{url_type}-{obj.pk}"))
+        # Children are drawn relative to the object center so a single transform on the group both
+        # positions and rotates the marker (the interactive layer rewrites only this transform).
+        group = drawing.g(class_="object")
+        group["transform"] = f"translate({center_x},{center_y}) rotate({rotation})"
+        group["data-tile-id"] = str(tile.pk)
+        group["data-pos-x"] = tile.pos_x
+        group["data-pos-y"] = tile.pos_y
+        group["data-rotation"] = rotation
+        group.add(
+            drawing.rect(
+                insert=(-pw / 2, -ph / 2),
+                size=(pw, ph),
+                rx=self.CORNER_RADIUS,
+                class_="object",
+                style=f"fill: #{color}",
+            )
+        )
+        self._draw_freeform_text(drawing, group, obj, label, color)
+        link.add(group)
+        link["data-tooltip"] = json.dumps(self._get_tooltip_data(obj, label))
+        link["class"] = "object-tooltip"
+
+    def _draw_freeform_text(self, drawing, group, obj, label, color):
+        """Draw the object name and type centered on the freeform marker origin."""
+        group.add(
+            drawing.text(
+                obj.name,
+                insert=(0, -self.TEXT_LINE_HEIGHT / 2),
+                class_="label-text-primary",
+                style=f"fill: {fgcolor(color)}",
+            )
+        )
+        group.add(
+            drawing.text(
+                label,
+                insert=(0, self.TEXT_LINE_HEIGHT),
+                class_="label-text",
+                style=f"fill: {fgcolor(color)}",
+            )
+        )
+
     def render(self):
         """Generate an SVG document representing a FloorPlan."""
         logger.debug("Setting up drawing...")
-        drawing = self._setup_drawing(
-            width=self.floor_plan.x_size * self.GRID_SIZE_X + self.GRID_OFFSET + self.BORDER_WIDTH * 2,
-            depth=self.floor_plan.y_size * self.GRID_SIZE_Y + self.GRID_OFFSET + self.BORDER_WIDTH * 2,
-        )
-        # Draw Rack Groups and status boxes before the grid is created
+        default_width = self.floor_plan.x_size * self.GRID_SIZE_X + self.GRID_OFFSET + self.BORDER_WIDTH * 2
+        default_depth = self.floor_plan.y_size * self.GRID_SIZE_Y + self.GRID_OFFSET + self.BORDER_WIDTH * 2
+        extents = self._drawing_extents(default_width, default_depth)
+        drawing = self._setup_drawing(width=default_width, depth=default_depth, viewbox=extents)
+
+        # 1. Blueprint first, so it sits behind grid and tiles.
+        self._draw_background_image(drawing)
+
+        # 2. Grid-geometry status/rackgroup underlays. Skip tiles rendered via the freeform path,
+        #    otherwise a repositioned object leaves a ghost status box at its original grid cell.
         logger.debug("Rendering underlying rack_group and status tiles...")
         for tile in self.floor_plan.tiles.all():
+            if self._is_freeform_tile(tile):
+                continue
             self._draw_underlay_tiles(drawing, tile)
 
-        # Overlay the grid on top of the status and rackgroups to show available rack space
-        logger.debug("Rendering underlying grid...")
-        self._draw_grid(drawing)
+        # 3. Overlay the grid, unless the plan hides it in favor of the blueprint.
+        if self.floor_plan.show_grid:
+            logger.debug("Rendering underlying grid...")
+            self._draw_grid(drawing)
 
-        # Call the draw tile function which handles the drawing of status, rackgroup and rack tiles
+        # 4. Object tiles: freeform-positioned where available, grid otherwise.
         logger.debug("Rendering tiles...")
         for tile in self.floor_plan.tiles.all():
-            self._draw_tile(drawing, tile)
+            if self._is_freeform_tile(tile):
+                self._draw_freeform_tile(drawing, tile)
+            else:
+                self._draw_tile(drawing, tile)
 
         logger.debug("Drawing rendered!")
         return drawing

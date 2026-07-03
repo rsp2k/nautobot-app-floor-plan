@@ -11,7 +11,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from nautobot_floor_plan import models, svg
-from nautobot_floor_plan.choices import ObjectOrientationChoices
+from nautobot_floor_plan.choices import ObjectOrientationChoices, PlacementModeChoices
 from nautobot_floor_plan.tests import fixtures
 from nautobot_floor_plan.tests.fixtures import create_prerequisites
 
@@ -309,7 +309,9 @@ class FloorPlanSVGTestCase(TestCase):
         self.floor_plan.tiles.all.return_value = [mock_tile1, mock_tile2]
 
         # Mock methods called by render
+        self.svg._drawing_extents = MagicMock(return_value=(0, 0, 796, 796))
         self.svg._setup_drawing = MagicMock(return_value=mock_drawing)
+        self.svg._draw_background_image = MagicMock()
         self.svg._draw_underlay_tiles = MagicMock()
         self.svg._draw_grid = MagicMock()
         self.svg._draw_tile = MagicMock()
@@ -319,6 +321,8 @@ class FloorPlanSVGTestCase(TestCase):
 
         # Assertions
         self.svg._setup_drawing.assert_called_once()
+        self.svg._draw_background_image.assert_called_once_with(mock_drawing)
+        # Grid mode (mock placement_mode != freeform): every tile drawn via grid path with underlays.
         self.assertEqual(self.svg._draw_underlay_tiles.call_count, 2)
         self.svg._draw_grid.assert_called_once_with(mock_drawing)
         self.assertEqual(self.svg._draw_tile.call_count, 2)
@@ -553,3 +557,107 @@ class FloorPlanThemeTests(TestCase):
         self.assertIn(
             "filter: invert(1) hue-rotate(180deg);", response.content.decode()
         )  # Check that invert filter is being used
+
+
+class FloorPlanBlueprintSVGTests(TestCase):
+    """Wave A: blueprint background embedding and freeform tile rendering (real objects)."""
+
+    @staticmethod
+    def _image_file(name="blueprint.png", size=(200, 100)):
+        """Build an in-memory PNG upload with known pixel dimensions."""
+        from io import BytesIO  # pylint: disable=import-outside-toplevel
+
+        from django.core.files.uploadedfile import SimpleUploadedFile  # pylint: disable=import-outside-toplevel
+        from PIL import Image  # pylint: disable=import-outside-toplevel
+
+        buffer = BytesIO()
+        Image.new("RGB", size, (255, 255, 255)).save(buffer, format="PNG")
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/png")
+
+    def setUp(self):
+        """Set up prerequisites and a rendering user."""
+        data = create_prerequisites(floor_count=1)
+        self.status = data["status"]
+        self.floor = data["floors"][0]
+        self.base_url = "http://testserver"
+        self.user = User.objects.create(username="svguser", is_superuser=True)
+
+    def _render(self, floor_plan):
+        """Render a floor plan to an SVG string."""
+        return floor_plan.get_svg(user=self.user, base_url=self.base_url).tostring()
+
+    def test_no_blueprint_grid_mode_has_no_image(self):
+        """Grid plan with no blueprint renders no <image> and still publishes the content rect + grid."""
+        floor_plan = models.FloorPlan.objects.create(
+            location=self.floor, x_size=5, y_size=5, x_origin_seed=1, y_origin_seed=1
+        )
+        svg_str = self._render(floor_plan)
+        self.assertNotIn("<image", svg_str)
+        self.assertIn('data-content-w="750"', svg_str)  # 5 * GRID_SIZE_X(150)
+        self.assertIn('class="grid"', svg_str)
+
+    def test_background_image_embedded(self):
+        """A blueprint is base64-embedded with an id, opacity, and resolved normalized data-bg-* attrs."""
+        floor_plan = models.FloorPlan.objects.create(
+            location=self.floor,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            background_image=self._image_file(),
+        )
+        svg_str = self._render(floor_plan)
+        self.assertIn("<image", svg_str)
+        self.assertIn("data:image/png;base64,", svg_str)
+        self.assertIn('id="blueprint-image"', svg_str)
+        self.assertIn("data-bg-width", svg_str)
+        self.assertIn('data-bg-autofit="true"', svg_str)
+        self.assertIn("opacity=", svg_str)
+
+    def test_background_opacity_zero_skips_image(self):
+        """Zero opacity is treated as no blueprint."""
+        floor_plan = models.FloorPlan.objects.create(
+            location=self.floor,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            background_image=self._image_file(),
+            background_opacity=0,
+        )
+        self.assertNotIn("<image", self._render(floor_plan))
+
+    def test_show_grid_false_suppresses_grid(self):
+        """Hiding the grid removes the grid lines but keeps the rest of the drawing."""
+        floor_plan = models.FloorPlan.objects.create(
+            location=self.floor, x_size=5, y_size=5, x_origin_seed=1, y_origin_seed=1, show_grid=False
+        )
+        self.assertNotIn('class="grid"', self._render(floor_plan))
+
+    def test_freeform_tile_center_anchored(self):
+        """A freeform tile renders a center-anchored, transform-positioned group at the content-rect point."""
+        floor_plan = models.FloorPlan.objects.create(
+            location=self.floor,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        rack = Rack.objects.create(name="R1", status=self.status, location=self.floor)
+        tile = models.FloorPlanTile(
+            floor_plan=floor_plan,
+            status=self.status,
+            x_origin=1,
+            y_origin=1,
+            rack=rack,
+            pos_x=0.5,
+            pos_y=0.5,
+            width=0.1,
+            height=0.1,
+        )
+        tile.validated_save()
+        svg_str = self._render(floor_plan)
+        # content_w = 5 * 150 = 750; center = 26 + 0.5 * 750 = 401.
+        self.assertIn("translate(401.0,401.0)", svg_str)
+        self.assertIn("data-tile-id", svg_str)

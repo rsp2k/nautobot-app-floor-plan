@@ -160,3 +160,22 @@ rect.object-orientation {
 .indicator-arrow {
     pointer-events: none;
 }
+
+/* Blueprint background: sits behind the grid and never intercepts clicks in view mode. */
+.background-image {
+    pointer-events: none;
+}
+
+/* Interaction-mode cursor affordances (consumed by the drag layer). */
+svg[data-ui-mode="place"] g.object {
+    cursor: grab;
+}
+
+svg[data-ui-mode="place"] g.object.dragging {
+    cursor: grabbing;
+}
+
+svg[data-ui-mode="calibrate"] #blueprint-image {
+    pointer-events: auto;
+    cursor: move;
+}

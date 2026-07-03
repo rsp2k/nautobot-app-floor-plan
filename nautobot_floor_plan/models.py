@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from nautobot.apps.models import PrimaryModel, StatusField, extras_features
 
@@ -13,6 +13,7 @@ from nautobot_floor_plan.choices import (
     AxisLabelsChoices,
     CustomAxisLabelsChoices,
     ObjectOrientationChoices,
+    PlacementModeChoices,
 )
 from nautobot_floor_plan.svg import FloorPlanSVG
 from nautobot_floor_plan.templatetags.seed_helpers import (
@@ -117,6 +118,38 @@ class FloorPlan(PrimaryModel):
         help_text="Positive or negative integer that will be used to step labeling.",
     )
     is_tile_movable = models.BooleanField(default=True, help_text="Determines if Tiles can be moved once placed")
+
+    placement_mode = models.CharField(
+        max_length=10,
+        choices=PlacementModeChoices,
+        default=PlacementModeChoices.GRID,
+        help_text="Grid snaps tiles to cells. Freeform places objects at any position over a background image.",
+    )
+    show_grid = models.BooleanField(
+        default=True,
+        help_text="Show the tile grid overlay. Turn off to show only the blueprint and placed objects.",
+    )
+    background_image = models.ImageField(
+        upload_to="floor_plan_backgrounds/",
+        blank=True,
+        null=True,
+        width_field="background_image_width",
+        height_field="background_image_height",
+        help_text="Optional blueprint image rendered behind the floor plan.",
+    )
+    background_image_width = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    background_image_height = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    background_opacity = models.PositiveSmallIntegerField(
+        default=100,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Opacity of the background blueprint image, from 0 (transparent) to 100 (opaque).",
+    )
+    # Calibration: placement rectangle of the blueprint in SVG user units. Null means auto-fit to the grid extent.
+    bg_x = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint left offset in SVG units.")
+    bg_y = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint top offset in SVG units.")
+    bg_width = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint width in SVG units.")
+    bg_height = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint height in SVG units.")
+    bg_rotation = models.FloatField(default=0, help_text="Calibration: blueprint rotation in degrees.")
 
     class Meta:
         """Metaclass attributes."""
@@ -390,6 +423,34 @@ class FloorPlanTile(PrimaryModel):
     on_group_tile = models.BooleanField(
         default=False, blank=True, help_text="Determines if a tile is placed on top of another tile"
     )
+
+    # Freeform placement: normalized position and size relative to the blueprint extent (0..1).
+    # Populated when the parent FloorPlan is in freeform mode; null for pure grid tiles.
+    pos_x = models.FloatField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0)],
+        help_text="Freeform X position, normalized 0..1 across the blueprint width.",
+    )
+    pos_y = models.FloatField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0)],
+        help_text="Freeform Y position, normalized 0..1 across the blueprint height.",
+    )
+    width = models.FloatField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0)],
+        help_text="Freeform width, normalized 0..1 of the blueprint width.",
+    )
+    height = models.FloatField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0)],
+        help_text="Freeform height, normalized 0..1 of the blueprint height.",
+    )
+    rotation = models.FloatField(default=0, help_text="Freeform rotation in degrees.")
 
     class Meta:
         """Metaclass attributes."""

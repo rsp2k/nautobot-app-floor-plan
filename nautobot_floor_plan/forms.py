@@ -87,7 +87,24 @@ class FloorPlanForm(NautobotModelForm):
         """Meta attributes."""
 
         model = models.FloorPlan
-        fields = "__all__"
+        # Explicit list (not "__all__") so additive model fields such as the freeform/blueprint
+        # settings don't silently become required form inputs. User-facing blueprint controls are
+        # wired into the form in a later phase; calibration fields (bg_*) are set programmatically.
+        fields = [
+            "location",
+            "x_size",
+            "y_size",
+            "tile_width",
+            "tile_depth",
+            "x_axis_labels",
+            "y_axis_labels",
+            "x_origin_seed",
+            "y_origin_seed",
+            "x_axis_step",
+            "y_axis_step",
+            "is_tile_movable",
+            "tags",
+        ]
 
     @property
     def x_ranges(self):
@@ -504,7 +521,17 @@ class FloorPlanTileForm(NautobotModelForm):
 
         model = models.FloorPlanTile
         fields = "__all__"
-        exclude = ["allocation_type", "on_group_tile"]  # pylint: disable=modelform-uses-exclude
+        # Freeform placement fields (pos_x/pos_y/width/height/rotation) are set by drag placement,
+        # not this grid-oriented form, so keep them out of it.
+        exclude = [  # pylint: disable=modelform-uses-exclude
+            "allocation_type",
+            "on_group_tile",
+            "pos_x",
+            "pos_y",
+            "width",
+            "height",
+            "rotation",
+        ]
 
     fieldsets = (
         (

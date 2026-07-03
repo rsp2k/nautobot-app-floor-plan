@@ -67,6 +67,18 @@ class AllocationTypeChoices(ChoiceSet):
     )
 
 
+class PlacementModeChoices(ChoiceSet):
+    """Choices for how tiles are positioned within a FloorPlan."""
+
+    GRID = "grid"
+    FREEFORM = "freeform"
+
+    CHOICES = (
+        (GRID, "Grid"),
+        (FREEFORM, "Freeform"),
+    )
+
+
 class ObjectTypeChoices(ChoiceSet):
     """Choices for FloorPlanTile object types."""
 
