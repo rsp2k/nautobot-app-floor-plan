@@ -1,10 +1,12 @@
 """Test FloorPlan."""
 
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from nautobot.core.testing import TestCase
 from nautobot.dcim.models import Device, Location, PowerFeed, PowerPanel, Rack, RackGroup
 
 from nautobot_floor_plan import models
+from nautobot_floor_plan.choices import ObjectOrientationChoices, PlacementModeChoices
 from nautobot_floor_plan.tests import fixtures
 
 
@@ -858,3 +860,142 @@ class TestFloorPlanTilePower(TestCase):
         )
         with self.assertRaisesRegex(ValidationError, "Object tiles cannot overlap"):
             invalid_panel_tile.clean()
+
+
+class TestFreeformPlacement(TestCase):
+    """Test freeform placement, validation, and grid-to-freeform conversion."""
+
+    def setUp(self):
+        """Set up prerequisites."""
+        prerequisites = fixtures.create_prerequisites(floor_count=3)
+        self.status = prerequisites["status"]
+        self.floors = prerequisites["floors"]
+
+    def _grid_plan(self, **kwargs):
+        return models.FloorPlan.objects.create(
+            location=self.floors[0], x_size=5, y_size=5, x_origin_seed=1, y_origin_seed=1, **kwargs
+        )
+
+    def test_convert_to_freeform_center_anchored(self):
+        """Conversion seeds center-anchored, content-rect-normalized coordinates from grid cells."""
+        plan = self._grid_plan()
+        tile = models.FloorPlanTile(floor_plan=plan, x_origin=2, y_origin=3, status=self.status)
+        tile.validated_save()
+
+        modified = plan.convert_to_freeform()
+
+        self.assertEqual(len(modified), 1)
+        tile.refresh_from_db()
+        # col=1, row=2, x_size=y_size=1, totals=5.
+        self.assertAlmostEqual(tile.pos_x, (1 + 0.5) / 5)
+        self.assertAlmostEqual(tile.pos_y, (2 + 0.5) / 5)
+        self.assertAlmostEqual(tile.width, 1 / 5)
+        self.assertAlmostEqual(tile.height, 1 / 5)
+        # Grid origins are retained (reversible).
+        self.assertEqual((tile.x_origin, tile.y_origin), (2, 3))
+
+    def test_convert_seeds_rotation_from_orientation(self):
+        """Conversion seeds rotation from the tile's discrete orientation."""
+        plan = self._grid_plan()
+        rack = Rack.objects.create(name="RR", status=self.status, location=self.floors[0])
+        tile = models.FloorPlanTile(
+            floor_plan=plan,
+            x_origin=1,
+            y_origin=1,
+            status=self.status,
+            rack=rack,
+            object_orientation=ObjectOrientationChoices.LEFT,
+        )
+        tile.validated_save()
+        plan.convert_to_freeform()
+        tile.refresh_from_db()
+        self.assertEqual(tile.rotation, 270)
+
+    def test_convert_is_idempotent_and_forceable(self):
+        """A second conversion skips seeded tiles unless forced."""
+        plan = self._grid_plan()
+        tile = models.FloorPlanTile(floor_plan=plan, x_origin=2, y_origin=2, status=self.status)
+        tile.validated_save()
+        plan.convert_to_freeform()
+
+        # Manual edit that a plain re-convert must preserve.
+        tile.refresh_from_db()
+        tile.pos_x = 0.9
+        tile.save(update_fields=["pos_x"])
+
+        self.assertEqual(plan.convert_to_freeform(), [])  # already seeded -> skipped
+        tile.refresh_from_db()
+        self.assertAlmostEqual(tile.pos_x, 0.9)
+
+        self.assertEqual(len(plan.convert_to_freeform(force=True)), 1)  # forced -> re-seeded
+        tile.refresh_from_db()
+        self.assertAlmostEqual(tile.pos_x, (1 + 0.5) / 5)
+
+    def test_pos_out_of_range_rejected(self):
+        """pos_x/pos_y outside 0..1 fail validation."""
+        plan = self._grid_plan(placement_mode=PlacementModeChoices.FREEFORM)
+        tile = models.FloorPlanTile(
+            floor_plan=plan, x_origin=1, y_origin=1, status=self.status, pos_x=1.5, pos_y=0.5
+        )
+        with self.assertRaises(ValidationError):
+            tile.validated_save()
+
+    def test_pos_pairing_required(self):
+        """Setting only one of pos_x/pos_y is rejected."""
+        plan = self._grid_plan(placement_mode=PlacementModeChoices.FREEFORM)
+        tile = models.FloorPlanTile(floor_plan=plan, x_origin=1, y_origin=1, status=self.status, pos_x=0.5)
+        with self.assertRaises(ValidationError):
+            tile.validated_save()
+
+    def test_width_zero_rejected(self):
+        """A non-positive footprint is rejected."""
+        plan = self._grid_plan(placement_mode=PlacementModeChoices.FREEFORM)
+        tile = models.FloorPlanTile(
+            floor_plan=plan, x_origin=1, y_origin=1, status=self.status, pos_x=0.5, pos_y=0.5, width=0
+        )
+        with self.assertRaises(ValidationError):
+            tile.validated_save()
+
+    def test_origin_pairing_constraint(self):
+        """A half-null grid origin is rejected by the pairing constraint."""
+        plan = self._grid_plan(placement_mode=PlacementModeChoices.FREEFORM)
+        tile = models.FloorPlanTile(
+            floor_plan=plan, x_origin=1, y_origin=None, status=self.status, pos_x=0.5, pos_y=0.5
+        )
+        with self.assertRaises((ValidationError, IntegrityError)):
+            with transaction.atomic():
+                tile.validated_save()
+
+    def test_overlap_allowed_in_freeform_mode(self):
+        """Overlapping object footprints are allowed in freeform mode (rejected in grid mode)."""
+        rack_a = Rack.objects.create(name="RA", status=self.status, location=self.floors[0])
+        rack_b = Rack.objects.create(name="RB", status=self.status, location=self.floors[0])
+
+        # Grid mode: a 2-wide tile then a tile inside its span overlap and are rejected.
+        grid_plan = self._grid_plan()
+        models.FloorPlanTile(
+            floor_plan=grid_plan, x_origin=1, y_origin=1, x_size=2, status=self.status, rack=rack_a
+        ).validated_save()
+        with self.assertRaisesRegex(ValidationError, "Object tiles cannot overlap"):
+            models.FloorPlanTile(
+                floor_plan=grid_plan, x_origin=2, y_origin=1, status=self.status, rack=rack_b
+            ).validated_save()
+
+        # Freeform mode: the same overlapping geometry saves without error.
+        free_plan = models.FloorPlan.objects.create(
+            location=self.floors[1],
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        rack_c = Rack.objects.create(name="RC", status=self.status, location=self.floors[1])
+        rack_d = Rack.objects.create(name="RD", status=self.status, location=self.floors[1])
+        models.FloorPlanTile(
+            floor_plan=free_plan, x_origin=1, y_origin=1, x_size=2, status=self.status, rack=rack_c
+        ).validated_save()
+        # Should not raise.
+        models.FloorPlanTile(
+            floor_plan=free_plan, x_origin=2, y_origin=1, status=self.status, rack=rack_d
+        ).validated_save()

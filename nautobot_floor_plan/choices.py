@@ -79,6 +79,16 @@ class PlacementModeChoices(ChoiceSet):
     )
 
 
+# Seed a freeform rotation (degrees, clockwise in the y-down SVG space) from a grid tile's
+# discrete front-facing orientation when converting a plan from grid to freeform.
+ORIENTATION_TO_DEGREES = {
+    ObjectOrientationChoices.UP: 0,
+    ObjectOrientationChoices.RIGHT: 90,
+    ObjectOrientationChoices.DOWN: 180,
+    ObjectOrientationChoices.LEFT: 270,
+}
+
+
 class ObjectTypeChoices(ChoiceSet):
     """Choices for FloorPlanTile object types."""
 

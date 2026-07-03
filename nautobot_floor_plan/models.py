@@ -1,6 +1,7 @@
 """Models for Nautobot Floor Plan."""
 
 import logging
+import math
 from dataclasses import dataclass
 
 from django.core.exceptions import ValidationError
@@ -9,6 +10,7 @@ from django.db import models, transaction
 from nautobot.apps.models import PrimaryModel, StatusField, extras_features
 
 from nautobot_floor_plan.choices import (
+    ORIENTATION_TO_DEGREES,
     AllocationTypeChoices,
     AxisLabelsChoices,
     CustomAxisLabelsChoices,
@@ -190,7 +192,8 @@ class FloorPlan(PrimaryModel):
 
     def update_tile_origins(self, x_initial, x_updated, y_initial, y_updated):
         """Update any existing tiles if axis_origin_seed was modified."""
-        tiles = self.tiles.all()
+        # Pure-freeform tiles have no grid origins to shift.
+        tiles = self.tiles.filter(x_origin__isnull=False, y_origin__isnull=False)
         x_delta = x_updated - x_initial
         y_delta = y_updated - y_initial
 
@@ -269,6 +272,35 @@ class FloorPlan(PrimaryModel):
             # Update tiles
             for tile in tiles:
                 tile.validated_save()
+
+    def convert_to_freeform(self, *, force=False, save=True):
+        """Seed freeform coordinates for grid tiles from their grid cells.
+
+        Positions are center-anchored and normalized to the content rect, matching the renderer. This
+        is idempotent (already-seeded tiles are skipped unless ``force``) and reversible: grid origins
+        are never touched, so a plan can be switched back to grid mode without data loss. Returns the
+        list of modified tiles.
+        """
+        x_total, y_total = self.x_size, self.y_size  # >= 1 via MinValueValidator, so no divide-by-zero
+        modified = []
+        for tile in self.tiles.filter(x_origin__isnull=False, y_origin__isnull=False):
+            if not force and tile.pos_x is not None and tile.pos_y is not None:
+                continue
+            col = tile.x_origin - self.x_origin_seed
+            row = tile.y_origin - self.y_origin_seed
+            tile.pos_x = (col + 0.5 * tile.x_size) / x_total
+            tile.pos_y = (row + 0.5 * tile.y_size) / y_total
+            tile.width = tile.x_size / x_total
+            tile.height = tile.y_size / y_total
+            tile.rotation = ORIENTATION_TO_DEGREES.get(tile.object_orientation, 0)
+            modified.append(tile)
+        if save and modified:
+            with transaction.atomic():
+                for tile in modified:
+                    # In-range by construction (validate_tile_placement bounds), so save the geometry
+                    # fields directly rather than re-running grid overlap validation.
+                    tile.save(update_fields=["pos_x", "pos_y", "width", "height", "rotation"])
+        return modified
 
 
 @extras_features(
@@ -358,8 +390,11 @@ class FloorPlanTile(PrimaryModel):
     floor_plan = models.ForeignKey(to=FloorPlan, on_delete=models.CASCADE, related_name="tiles")
     # TODO: for efficiency we could consider using something like GeoDjango, rather than inventing geometry from
     # first principles, but since that requires changing settings.DATABASES and installing libraries, avoid it for now.
-    x_origin = models.PositiveSmallIntegerField(validators=[MinValueValidator(0)])
-    y_origin = models.PositiveSmallIntegerField(validators=[MinValueValidator(0)])
+    # Nullable so a plan can hold pure-freeform tiles (positioned only by pos_x/pos_y). Grid tiles
+    # and grid-to-freeform conversions keep their origins. The Meta CheckConstraint enforces that the
+    # pair is set together or not at all.
+    x_origin = models.PositiveSmallIntegerField(validators=[MinValueValidator(0)], blank=True, null=True)
+    y_origin = models.PositiveSmallIntegerField(validators=[MinValueValidator(0)], blank=True, null=True)
     x_size = models.PositiveSmallIntegerField(
         validators=[MinValueValidator(1)],
         default=1,
@@ -429,34 +464,41 @@ class FloorPlanTile(PrimaryModel):
     pos_x = models.FloatField(
         blank=True,
         null=True,
-        validators=[MinValueValidator(0)],
-        help_text="Freeform X position, normalized 0..1 across the blueprint width.",
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
+        help_text="Freeform X position (object center), normalized 0..1 across the content rect width.",
     )
     pos_y = models.FloatField(
         blank=True,
         null=True,
-        validators=[MinValueValidator(0)],
-        help_text="Freeform Y position, normalized 0..1 across the blueprint height.",
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
+        help_text="Freeform Y position (object center), normalized 0..1 across the content rect height.",
     )
     width = models.FloatField(
         blank=True,
         null=True,
         validators=[MinValueValidator(0)],
-        help_text="Freeform width, normalized 0..1 of the blueprint width.",
+        help_text="Freeform width, normalized to the content rect width (may exceed 1 near an edge).",
     )
     height = models.FloatField(
         blank=True,
         null=True,
         validators=[MinValueValidator(0)],
-        help_text="Freeform height, normalized 0..1 of the blueprint height.",
+        help_text="Freeform height, normalized to the content rect height (may exceed 1 near an edge).",
     )
-    rotation = models.FloatField(default=0, help_text="Freeform rotation in degrees.")
+    rotation = models.FloatField(default=0, help_text="Freeform rotation in degrees, clockwise.")
 
     class Meta:
         """Metaclass attributes."""
 
         ordering = ["floor_plan", "y_origin", "x_origin"]
         unique_together = ["floor_plan", "x_origin", "y_origin", "allocation_type"]
+        constraints = [
+            models.CheckConstraint(
+                name="floorplantile_origin_pairing",
+                check=models.Q(x_origin__isnull=False, y_origin__isnull=False)
+                | models.Q(x_origin__isnull=True, y_origin__isnull=True),
+            )
+        ]
 
     def allocation_type_assignment(self):
         """Assign the appropriate tile allocation type when saving in clean."""
@@ -520,13 +562,45 @@ class FloorPlanTile(PrimaryModel):
         """
         super().clean()
         FloorPlanTile.allocation_type_assignment(self)
-        FloorPlanTile.validate_tile_placement(self)
+        self._validate_freeform()
+
+        grid_positioned = self.x_origin is not None and self.y_origin is not None
+        freeform_mode = self.floor_plan.placement_mode == PlacementModeChoices.FREEFORM
+        if grid_positioned:
+            # Bounds are always meaningful when origins are set; skipping them would let stale data drift.
+            FloorPlanTile.validate_tile_placement(self)
+            # Grid cell-collision rules only apply in grid mode. In freeform mode physical adjacency
+            # (and overlap) is intentional, so these are suppressed even for converted tiles.
+            if not freeform_mode:
+                self._validate_tile_overlaps()
+                self._validate_rack_rackgroup()
 
         self._validate_installed_objects()
         self._validate_object_locations()
-        self._validate_tile_overlaps()
-        self._validate_rack_rackgroup()
         self._validate_single_object_assignment()
+
+    def _validate_freeform(self):
+        """Validate freeform placement coordinates when present."""
+        if self.pos_x is None and self.pos_y is None:
+            return
+        if self.pos_x is None or self.pos_y is None:
+            raise ValidationError({"pos_x": "Both pos_x and pos_y are required for freeform placement."})
+        for field in ("pos_x", "pos_y"):
+            value = getattr(self, field)
+            if not math.isfinite(value):
+                raise ValidationError({field: "Must be a finite number."})
+            if not 0 <= value <= 1:
+                raise ValidationError({field: "Must be between 0 and 1."})
+        for field in ("width", "height"):
+            value = getattr(self, field)
+            if value is None:
+                continue
+            if not math.isfinite(value):
+                raise ValidationError({field: "Must be a finite number."})
+            if value <= 0:
+                raise ValidationError({field: "Must be greater than 0."})
+        if self.rotation is not None and math.isfinite(self.rotation):
+            self.rotation %= 360
 
     def _validate_installed_objects(self):
         """Validate that devices aren't installed in racks."""
@@ -672,4 +746,6 @@ class FloorPlanTile(PrimaryModel):
 
     def __str__(self):
         """Stringify instance."""
+        if self.x_origin is None or self.y_origin is None:
+            return f"Tile (freeform {self.pos_x}, {self.pos_y}) in {self.floor_plan}"
         return f"Tile ({render_axis_origin(self, 'X')}, {render_axis_origin(self, 'Y')}), ({self.x_size},{self.y_size}) in {self.floor_plan}"
