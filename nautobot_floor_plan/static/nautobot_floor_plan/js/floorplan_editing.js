@@ -768,6 +768,11 @@ function initFloorPlanEditing() {
             g.dataset.posX = nx;
             g.dataset.posY = ny;
             g.dataset.rotation = rot;
+            // The base viewer (floorplan.js) hangs the hover tooltip on the wrapping <a.object-tooltip>.
+            // tippy caches the reference rect, so after we transform the marker a visible bubble stays at
+            // the old spot. Nudge its popper so the tooltip tracks the marker as it moves.
+            var tipEl = g.closest && g.closest(".object-tooltip");
+            if (tipEl && tipEl._tippy && tipEl._tippy.popperInstance) tipEl._tippy.popperInstance.update();
         }
         function snapshotMarker(g) {
             return {
