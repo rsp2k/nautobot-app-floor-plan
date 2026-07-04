@@ -10,7 +10,27 @@ from nautobot.apps.config import get_app_settings_or_config
 
 from nautobot_floor_plan.choices import AxisLabelsChoices
 
-__version__ = metadata.version(__name__)
+def _resolve_version():
+    """Version from whichever distribution provides this import package.
+
+    The upstream distribution is ``nautobot-floor-plan``; this fork publishes as
+    ``nautobot-floor-plan-freeform`` (same ``nautobot_floor_plan`` import name), so a lookup by
+    the import name alone fails. Resolve via packages_distributions, then fall back to known names.
+    """
+    try:
+        for dist in metadata.packages_distributions().get(__name__, []):
+            return metadata.version(dist)
+    except Exception:  # noqa: BLE001
+        pass
+    for candidate in ("nautobot-floor-plan-freeform", "nautobot-floor-plan"):
+        try:
+            return metadata.version(candidate)
+        except metadata.PackageNotFoundError:
+            continue
+    return "0.0.0"
+
+
+__version__ = _resolve_version()
 
 
 class FloorPlanConfig(NautobotAppConfig):
