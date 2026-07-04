@@ -11,9 +11,10 @@ from nautobot_floor_plan.placement.registry import (
     registry,
 )
 
-# Aliases for apps that register under a more explicit name. External apps (e.g. a medical-device
-# library) call register_placeable_type(...) from their AppConfig.ready() to add their own types,
-# glyphs, and colors — including per-object glyph_resolver/color_resolver callables.
+# Aliases for apps that register under a more explicit name. An external app can call
+# register_placeable_type(...) from its AppConfig.ready() to add its own types, glyphs, and colors
+# (including per-object glyph_resolver/color_resolver callables). Presentation can also be defined
+# admin-side via FloorPlanObjectType, keyed by content type — no cross-app import either way.
 register_placeable = register
 register_placeable_type = register
 

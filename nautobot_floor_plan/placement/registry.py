@@ -43,8 +43,8 @@ class PlacementType:
     # used instead of a built-in ICON_GLYPHS key when ``icon`` doesn't cover it.
     glyph_paths_data: Optional[list] = None
     glyph_viewbox: int = 24
-    # Per-object dynamic resolvers for unbounded, library-owned types (e.g. a MedicalDeviceType
-    # library where each type row owns its glyph/color). Resolved at render time, in svg.py only.
+    # Per-object dynamic resolvers, for an app whose object-type library owns each row's
+    # glyph/color and wants it resolved at render time (not a fixed variant set). svg.py only.
     glyph_resolver: Optional[Callable] = None  # obj -> (paths, viewbox)
     color_resolver: Optional[Callable] = None  # obj -> hex color (no leading '#')
 
