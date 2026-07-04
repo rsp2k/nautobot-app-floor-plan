@@ -15,7 +15,9 @@ from rest_framework.test import APIClient
 
 from nautobot_floor_plan import models, svg
 from nautobot_floor_plan.choices import ObjectOrientationChoices, PlacementModeChoices
-from nautobot_floor_plan.placement.icons import ICON_GLYPHS
+from nautobot_floor_plan.placement import registry
+from nautobot_floor_plan.placement.icons import ICON_GLYPHS, ICON_VIEWBOX, resolve_glyph
+from nautobot_floor_plan.placement.registry import PlacementType
 from nautobot_floor_plan.tests import fixtures
 from nautobot_floor_plan.tests.fixtures import create_prerequisites
 
@@ -765,3 +767,67 @@ class FloorPlanIconRenderingTests(TestCase):
         panel = PowerPanel.objects.create(name="LegPanel", location=self.floor)
         self._place(power_panel=panel)
         self.assertIn('class="legend-bg"', self._render())  # two types
+
+
+class TestGlyphAndColorResolvers(TestCase):
+    """Runtime-configurable types: glyph-as-data + per-object glyph/color resolvers."""
+
+    def setUp(self):
+        data = create_prerequisites(floor_count=1)
+        self.status = data["status"]
+        self.floor = data["floors"][0]
+        self.user = User.objects.create(username="glyphuser", is_superuser=True)
+        self.plan = models.FloorPlan.objects.create(
+            location=self.floor, x_size=5, y_size=5, x_origin_seed=1, y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        self.svg = svg.FloorPlanSVG(floor_plan=self.plan, user=self.user, base_url="http://testserver")
+
+    def test_resolve_glyph_builtin_and_custom(self):
+        self.assertEqual(resolve_glyph("server"), (ICON_GLYPHS["server"], ICON_VIEWBOX))
+        self.assertEqual(resolve_glyph("server", custom_paths=["M1 1 h2"], viewbox=32), (["M1 1 h2"], 32))
+
+    def test_effective_glyph_static_data(self):
+        placement = PlacementType(key="x.y", label="Y", glyph_paths_data=["M2 2 h4"], glyph_viewbox=48)
+        self.assertEqual(self.svg._effective_glyph(placement, obj=object()), (["M2 2 h4"], 48))
+
+    def test_effective_glyph_per_object_resolver(self):
+        placement = PlacementType(key="x.y", label="Y", glyph_resolver=lambda o: (["M3 3 h5"], 24))
+        self.assertEqual(self.svg._effective_glyph(placement, obj=object())[0], ["M3 3 h5"])
+
+    def test_effective_glyph_resolver_failure_falls_back_to_static(self):
+        def boom(_obj):
+            raise ValueError("nope")
+
+        placement = PlacementType(key="x.y", label="Y", icon="server", glyph_resolver=boom)
+        self.assertEqual(self.svg._effective_glyph(placement, obj=object())[0], ICON_GLYPHS["server"])
+
+    def test_effective_type_color_resolver_and_fallback(self):
+        placement = PlacementType(key="x.y", label="Y", color="111111", color_resolver=lambda o: "abcdef")
+        self.assertEqual(self.svg._effective_type_color(placement, obj=object()), "abcdef")
+
+        def boom(_obj):
+            raise ValueError()
+
+        placement2 = PlacementType(key="x.y", label="Y", color="111111", color_resolver=boom)
+        self.assertEqual(self.svg._effective_type_color(placement2, obj=object()), "111111")
+
+    def test_custom_glyph_renders_in_svg_output(self):
+        """A type registered with glyph-as-data renders its custom path in the SVG (marker + legend)."""
+        marker = "M1 2 h9 v9 h-9 z"  # distinctive, collision-unlikely path
+        registry.register(
+            "dcim.rack", label="Rack", icon="server", color="6c757d",
+            legend_order=10, glyph_paths_data=[marker], replace=True,
+        )
+        try:
+            rack = Rack.objects.create(name="GlyphRack", status=self.status, location=self.floor)
+            models.FloorPlanTile(
+                floor_plan=self.plan, status=self.status, rack=rack, x_origin=1, y_origin=1, pos_x=0.5, pos_y=0.5,
+            ).validated_save()
+            svg_str = self.plan.get_svg(user=self.user, base_url="http://testserver").tostring()
+            self.assertIn(marker, svg_str)
+        finally:
+            # Restore the builtin so other tests see the stock registration.
+            registry.register(
+                "dcim.rack", label="Rack", icon="server", color="6c757d", legend_order=10, replace=True,
+            )

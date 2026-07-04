@@ -17,7 +17,7 @@ from nautobot.dcim.models import Device, PowerFeed, PowerPanel, Rack
 
 from nautobot_floor_plan.choices import AllocationTypeChoices, ObjectOrientationChoices, PlacementModeChoices
 from nautobot_floor_plan.placement import registry
-from nautobot_floor_plan.placement.icons import ICON_VIEWBOX, glyph_paths
+from nautobot_floor_plan.placement.icons import ICON_VIEWBOX, glyph_paths, resolve_glyph
 from nautobot_floor_plan.templatetags.seed_helpers import render_axis_origin
 
 logger = logging.getLogger(__name__)
@@ -891,16 +891,32 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         if obj is None:
             return None
         placement = registry.resolve(obj)
+        type_color = self._effective_type_color(placement, obj)
         obj_status = getattr(obj, "status", None)
         if obj_status is not None:
             color = obj_status.color
-        elif placement is not None and placement.color:
-            color = placement.color
+        elif type_color:
+            color = type_color
         elif tile.status is not None:
             color = tile.status.color
         else:
             color = "6c757d"
         return obj, placement, color
+
+    def _effective_type_color(self, placement, obj):
+        """The type's color: a per-object ``color_resolver`` if present, else the static color.
+
+        Live object status color still wins over this in ``_resolve_placement`` — a faulted device
+        should read as its status, not its type's brand color.
+        """
+        if placement is None:
+            return None
+        if placement.color_resolver is not None:
+            try:
+                return placement.color_resolver(obj) or placement.color
+            except Exception:  # noqa: BLE001  pylint: disable=broad-except
+                logger.debug("color_resolver for %s raised; using static color.", placement.key, exc_info=True)
+        return placement.color
 
     def _placement_url(self, obj, placement):
         """Build the absolute detail URL for a placed object via its registered resolver."""
@@ -912,7 +928,25 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
             return "#"
         return f"{self.base_url}{url}" if url.startswith("/") else url
 
-    def _draw_icon(self, drawing, parent, footprint, placement, color, center=(0, 0)):
+    def _effective_glyph(self, placement, obj=None):
+        """Resolve ``(paths, viewbox)`` for a placement, honoring a per-object ``glyph_resolver``.
+
+        A resolver lets an unbounded, library-owned type (e.g. a MedicalDeviceType) supply its own
+        glyph at render time; falls back to the placement's static glyph (data or built-in key).
+        """
+        if placement is None:
+            return glyph_paths(None), ICON_VIEWBOX
+        if placement.glyph_resolver is not None and obj is not None:
+            try:
+                result = placement.glyph_resolver(obj)
+                if result and result[0]:
+                    paths, vb = result
+                    return list(paths), (vb or ICON_VIEWBOX)
+            except Exception:  # noqa: BLE001  pylint: disable=broad-except
+                logger.debug("glyph_resolver for %s raised; using static glyph.", placement.key, exc_info=True)
+        return resolve_glyph(placement.icon, placement.glyph_paths_data, placement.glyph_viewbox)
+
+    def _draw_icon(self, drawing, parent, footprint, placement, color, center=(0, 0), obj=None):
         """Draw a type glyph inside a legibility chip, centered at ``center`` within a marker group."""
         size = max(self.ICON_MIN, min(self.ICON_MAX, footprint * self.ICON_FOOTPRINT_FRAC))
         half = size / 2
@@ -926,10 +960,11 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
                 class_="marker-icon-chip",
             )
         )
+        paths, viewbox = self._effective_glyph(placement, obj)
         glyph = drawing.g(class_="marker-icon-glyph")
-        glyph["transform"] = f"translate({cx - half},{cy - half}) scale({size / ICON_VIEWBOX})"
+        glyph["transform"] = f"translate({cx - half},{cy - half}) scale({size / viewbox})"
         glyph["style"] = f"stroke: #{color}"
-        for path_def in glyph_paths(placement.icon if placement is not None else None):
+        for path_def in paths:
             glyph.add(drawing.path(d=path_def, fill="none"))
         parent.add(glyph)
 
@@ -984,7 +1019,7 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
             )
         )
         icon_size = max(self.ICON_MIN, min(self.ICON_MAX, min(pw, ph) * self.ICON_FOOTPRINT_FRAC))
-        self._draw_icon(drawing, group, min(pw, ph), placement, color, center=(0, -icon_size * 0.15))
+        self._draw_icon(drawing, group, min(pw, ph), placement, color, center=(0, -icon_size * 0.15), obj=obj)
         self._draw_freeform_text(drawing, group, obj, color, icon_size / 2 + self.TEXT_LINE_HEIGHT)
         # Hidden keyboard focus ring, revealed by JS toggling `.is-focused`. non-scaling-stroke keeps
         # the outline a constant screen width at every zoom; drawn last so it renders on top.
@@ -1030,12 +1065,16 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         entries = {}
         for placement in self._present_types.values():
             if placement is None:
-                entries["Unregistered"] = (10**9, "Unregistered", "help", "6c757d")
+                entries["Unregistered"] = (10**9, "Unregistered", tuple(glyph_paths("help")), ICON_VIEWBOX, "6c757d")
             else:
+                # The legend is per-type (no object), so a per-object glyph_resolver can't run here;
+                # fall back to the type's static glyph (custom data or built-in key).
+                paths, glyph_vb = resolve_glyph(placement.icon, placement.glyph_paths_data, placement.glyph_viewbox)
                 entries[placement.label] = (
                     placement.legend_order,
                     placement.label,
-                    placement.icon,
+                    tuple(paths),
+                    glyph_vb,
                     placement.color or "6c757d",
                 )
         rows = sorted(entries.values())
@@ -1048,12 +1087,12 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         drawing.add(
             drawing.rect(insert=(x0, y0), size=(self.LEGEND_WIDTH, height), rx=self.CORNER_RADIUS, class_="legend-bg")
         )
-        for index, (_order, label, icon, color) in enumerate(rows):
+        for index, (_order, label, paths, glyph_vb, color) in enumerate(rows):
             row_cy = y0 + self.CHIP_PAD + index * self.LEGEND_ROW_H + self.LEGEND_ROW_H / 2
             glyph = drawing.g(class_="marker-icon-glyph")
-            glyph["transform"] = f"translate({x0 + 10},{row_cy - self.LEGEND_ICON / 2}) scale({self.LEGEND_ICON / ICON_VIEWBOX})"
+            glyph["transform"] = f"translate({x0 + 10},{row_cy - self.LEGEND_ICON / 2}) scale({self.LEGEND_ICON / glyph_vb})"
             glyph["style"] = f"stroke: #{color}"
-            for path_def in glyph_paths(icon):
+            for path_def in paths:
                 glyph.add(drawing.path(d=path_def, fill="none"))
             drawing.add(glyph)
             drawing.add(

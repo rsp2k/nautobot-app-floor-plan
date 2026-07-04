@@ -77,6 +77,51 @@ ICON_GLYPHS = {
         "M3 12 L12 17 L21 12",
         "M3 16 L12 21 L21 16",
     ],
+    # Hospital device vocabulary.
+    "medical-equipment": [
+        "M4 5 h16 v12 h-16 z",
+        "M12 8.5 v5",
+        "M9.5 11 h5",
+    ],
+    "patient-sensor": [
+        "M2 12 h4 l2 -6 3 12 2 -8 2 4 h6",
+    ],
+    "nurse-call": [
+        "M12 3 h0.01",
+        "M7 18 v-5 a5 5 0 0 1 10 0 v5",
+        "M5 18 h14",
+        "M10 21 a2 2 0 0 0 4 0",
+    ],
+    "paging": [
+        "M4 10 v4 h3 l6 4 v-12 l-6 4 z",
+        "M17 9 a4 4 0 0 1 0 6",
+        "M19.5 7 a7 7 0 0 1 0 10",
+    ],
+    "hvac": [
+        "M4 5 h16 v14 h-16 z",
+        "M7 8 h10",
+        "M7 11 h10",
+        "M7 14 h10",
+        "M7 17 h10",
+    ],
+    "fan": [
+        "M12 12 a2 2 0 1 0 0.01 0",
+        "M12 10 C12 5 15 4 17 6 C18 8 16 11 12 12",
+        "M14 13 C18 14 19 17 17 18 C15 19 12 16 12 12",
+        "M11 14 C10 18 7 19 6 17 C5 15 8 12 12 12",
+    ],
+    "bed": [
+        "M3 7 v11",
+        "M3 13 h14 a4 4 0 0 1 4 4 v1",
+        "M3 18 h18",
+        "M6 13 v-2 h4 v2",
+    ],
+    "syringe": [
+        "M13 4 l7 7",
+        "M18 6 l-11 11 -3 3",
+        "M6 15 l3 3",
+        "M11 10 l3 3",
+    ],
     "help": [
         "M9.4 9 a2.6 2.6 0 1 1 3.7 2.3 c-1 0.5 -1.6 1.1 -1.6 2.4",
         "M12 17.5 h0.01",
@@ -89,3 +134,15 @@ FALLBACK_ICON = "help"
 def glyph_paths(icon_key):
     """Return the stroke path list for an icon key, falling back to the help glyph."""
     return ICON_GLYPHS.get(icon_key or FALLBACK_ICON, ICON_GLYPHS[FALLBACK_ICON])
+
+
+def resolve_glyph(icon_key=None, custom_paths=None, viewbox=None):
+    """Return ``(paths, viewbox)`` for a marker glyph.
+
+    Custom path data (a list of SVG path-"d" strings, e.g. from a DB row or another app's type
+    library) wins and carries its own viewbox; otherwise fall back to the built-in glyph for
+    ``icon_key`` on the standard 24x24 grid.
+    """
+    if custom_paths:
+        return list(custom_paths), (viewbox or ICON_VIEWBOX)
+    return glyph_paths(icon_key), ICON_VIEWBOX

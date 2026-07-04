@@ -39,6 +39,14 @@ class PlacementType:
     # ORM path from the object to its Location, used to build the picker's location filter param.
     # Keep consistent with location_resolver so eligibility and validation agree.
     location_field: str = "location"
+    # Glyph-as-data: a stored list of SVG path-"d" strings drawn on a ``glyph_viewbox`` grid,
+    # used instead of a built-in ICON_GLYPHS key when ``icon`` doesn't cover it.
+    glyph_paths_data: Optional[list] = None
+    glyph_viewbox: int = 24
+    # Per-object dynamic resolvers for unbounded, library-owned types (e.g. a MedicalDeviceType
+    # library where each type row owns its glyph/color). Resolved at render time, in svg.py only.
+    glyph_resolver: Optional[Callable] = None  # obj -> (paths, viewbox)
+    color_resolver: Optional[Callable] = None  # obj -> hex color (no leading '#')
 
 
 @dataclass
@@ -74,6 +82,10 @@ class PlacementRegistry:
         tooltip_builder=None,
         legend_order=100,
         location_field="location",
+        glyph_paths_data=None,
+        glyph_viewbox=24,
+        glyph_resolver=None,
+        color_resolver=None,
         replace=False,
     ):
         """Register a placeable type by its dotted ``app_label.model`` label."""
@@ -91,11 +103,28 @@ class PlacementRegistry:
             tooltip_builder=tooltip_builder,
             legend_order=legend_order,
             location_field=location_field,
+            glyph_paths_data=glyph_paths_data,
+            glyph_viewbox=glyph_viewbox,
+            glyph_resolver=glyph_resolver,
+            color_resolver=color_resolver,
         )
         self._entries[key] = _Entry(base=placement)
         return placement
 
-    def register_variant(self, model_label, variant_key, *, label, icon=None, color=None, legend_order=100):
+    def register_variant(
+        self,
+        model_label,
+        variant_key,
+        *,
+        label,
+        icon=None,
+        color=None,
+        legend_order=100,
+        glyph_paths_data=None,
+        glyph_viewbox=None,
+        glyph_resolver=None,
+        color_resolver=None,
+    ):
         """Register a per-discriminator variant (e.g. a Device Role) of an existing type."""
         entry = self._entries.get(model_label.lower())
         if entry is None:
@@ -112,6 +141,10 @@ class PlacementRegistry:
             tooltip_builder=base.tooltip_builder,
             legend_order=legend_order,
             location_field=base.location_field,
+            glyph_paths_data=glyph_paths_data if glyph_paths_data is not None else base.glyph_paths_data,
+            glyph_viewbox=glyph_viewbox if glyph_viewbox is not None else base.glyph_viewbox,
+            glyph_resolver=glyph_resolver or base.glyph_resolver,
+            color_resolver=color_resolver or base.color_resolver,
         )
 
     def set_discriminator(self, model_label, discriminator):

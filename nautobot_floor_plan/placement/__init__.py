@@ -11,7 +11,17 @@ from nautobot_floor_plan.placement.registry import (
     registry,
 )
 
-# Back-compat alias for apps that register under a more explicit name.
+# Aliases for apps that register under a more explicit name. External apps (e.g. a medical-device
+# library) call register_placeable_type(...) from their AppConfig.ready() to add their own types,
+# glyphs, and colors — including per-object glyph_resolver/color_resolver callables.
 register_placeable = register
+register_placeable_type = register
 
-__all__ = ("registry", "register", "register_variant", "register_placeable", "PlacementType")
+__all__ = (
+    "registry",
+    "register",
+    "register_variant",
+    "register_placeable",
+    "register_placeable_type",
+    "PlacementType",
+)
