@@ -41,9 +41,9 @@ for lt in (campus, building, floor):
     lt.content_types.add(fp_ct)  # allow floor plans at this level
 ```
 
-Note: as of this writing bingham prod has a **single flat `Site` LocationType** — the
-hierarchy above isn't modelled there yet. Defining it is a prerequisite for the
-drill-down markers to be meaningful.
+Note: a deployment may start with a **single flat `Site` LocationType** and no
+hierarchy modelled yet. Defining the Campus/Building/Floor types is a prerequisite for
+the drill-down markers to be meaningful.
 
 ## B. Location as a drill-down marker
 

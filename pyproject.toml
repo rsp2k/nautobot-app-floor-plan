@@ -1,17 +1,20 @@
 [tool.poetry]
-name = "nautobot-floor-plan"
+name = "nautobot-floor-plan-freeform"
 version = "3.0.2a4"
-description = "Nautobot Floor Plan"
-authors = ["Network to Code, LLC <info@networktocode.com>"]
+description = "Fork of nautobot-floor-plan adding blueprint backgrounds, freeform + generic object placement, interactive editing, and runtime-configurable placeable types. Drop-in: provides the same nautobot_floor_plan import package (mutually exclusive with the upstream distribution)."
+authors = [
+    "Ryan Malloy <ryan@supported.systems>",
+    "Network to Code, LLC <info@networktocode.com>",
+]
 license = "Apache-2.0"
 readme = "README.md"
-homepage = "https://github.com/nautobot/nautobot-app-floor-plan"
-repository = "https://github.com/nautobot/nautobot-app-floor-plan"
-documentation = "https://docs.nautobot.com/projects/floor-plan/en/latest/"
-keywords = ["nautobot", "nautobot-app", "nautobot-plugin"]
+homepage = "https://github.com/rsp2k/nautobot-app-floor-plan"
+repository = "https://github.com/rsp2k/nautobot-app-floor-plan"
+documentation = "https://github.com/rsp2k/nautobot-app-floor-plan"
+keywords = ["nautobot", "nautobot-app", "nautobot-plugin", "floor-plan", "blueprint"]
 classifiers = [
     "Intended Audience :: Developers",
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -25,6 +28,11 @@ packages = [
 include = [
     # Poetry by default will exclude files that are in .gitignore
     { path = "nautobot_floor_plan/static/nautobot_floor_plan/docs/**/*", format = ["sdist", "wheel"] }
+]
+# Never ship internal/operator files.
+exclude = [
+    "CLAUDE.md",
+    ".mcp.json",
 ]
 
 [tool.poetry.dependencies]
