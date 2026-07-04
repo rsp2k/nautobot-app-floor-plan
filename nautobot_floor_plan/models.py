@@ -856,3 +856,90 @@ class FloorPlanTile(PrimaryModel):
         if self.x_origin is None or self.y_origin is None:
             return f"Tile (freeform {self.pos_x}, {self.pos_y}) in {self.floor_plan}"
         return f"Tile ({render_axis_origin(self, 'X')}, {render_axis_origin(self, 'Y')}), ({self.x_size},{self.y_size}) in {self.floor_plan}"
+
+
+@extras_features(
+    "custom_fields",
+    "custom_validators",
+    "export_templates",
+    "graphql",
+    "relationships",
+    "webhooks",
+)
+class FloorPlanObjectType(PrimaryModel):
+    """Admin-defined placeable-type config, merged into the placement registry at runtime.
+
+    Lets operators add or override how an object type (or a variant of it) is placed and drawn on a
+    floor plan — label, glyph, color, legend order — with no code change. External apps can still
+    push their own registrations; a row here with ``override=True`` wins over those.
+    """
+
+    content_type = models.ForeignKey(
+        to=ContentType,
+        on_delete=models.CASCADE,
+        related_name="floor_plan_object_types",
+        help_text="The placeable model this config applies to (e.g. dcim.device).",
+    )
+    variant_key = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="If set, defines a variant of the base type, selected by the match rule below.",
+    )
+    label = models.CharField(max_length=100)
+    color = models.CharField(max_length=6, blank=True, help_text="Hex color, no leading '#'.")
+    glyph_key = models.CharField(max_length=50, blank=True, help_text="Name of a built-in floor-plan glyph.")
+    custom_glyph_paths = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="List of SVG path 'd' strings; overrides glyph_key when set.",
+    )
+    glyph_viewbox = models.PositiveSmallIntegerField(default=24)
+    legend_order = models.IntegerField(default=100)
+    location_field = models.CharField(
+        max_length=100,
+        default="location",
+        help_text="ORM path from the object to its Location (e.g. power_panel__location).",
+    )
+    match_field = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="For a variant: dotted attribute read from the object (e.g. role.name).",
+    )
+    match_keywords = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="For a variant: list of substrings that select this variant.",
+    )
+    match_precedence = models.IntegerField(default=100, help_text="Lower runs first when variants compete.")
+    override = models.BooleanField(default=True, help_text="Replace an existing code/app registration for this type.")
+    enabled = models.BooleanField(default=True)
+
+    class Meta:
+        """Meta attributes."""
+
+        ordering = ["content_type", "legend_order", "label"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["content_type", "variant_key"],
+                name="floorplanobjecttype_unique_type_variant",
+            ),
+        ]
+
+    def __str__(self):
+        """Stringify instance."""
+        suffix = f" [{self.variant_key}]" if self.variant_key else ""
+        return f"{self.label} ({self.content_type.app_label}.{self.content_type.model}){suffix}"
+
+    def clean(self):
+        """Validate the glyph source and the variant match-rule pairing."""
+        super().clean()
+        from nautobot_floor_plan.placement.icons import ICON_GLYPHS  # noqa: PLC0415  local: keep import light
+
+        if self.glyph_key and self.custom_glyph_paths:
+            raise ValidationError("Set either a built-in glyph_key OR custom_glyph_paths, not both.")
+        if self.glyph_key and self.glyph_key not in ICON_GLYPHS:
+            raise ValidationError({"glyph_key": f"Unknown built-in glyph '{self.glyph_key}'."})
+        if bool(self.match_field) != bool(self.match_keywords):
+            raise ValidationError("match_field and match_keywords must be set together.")
+        if (self.match_field or self.match_keywords) and not self.variant_key:
+            raise ValidationError("A match rule (match_field/match_keywords) requires a variant_key.")

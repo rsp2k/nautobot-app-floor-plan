@@ -74,6 +74,9 @@ class FloorPlanViewSet(NautobotModelViewSet):  # pylint: disable=too-many-ancest
     @action(detail=True, url_path="placeable-types")
     def placeable_types(self, request, *, pk):
         """List the object types that can be placed on this plan, scoped to its location."""
+        from nautobot_floor_plan.placement.config import refresh_if_stale  # noqa: PLC0415
+
+        refresh_if_stale()
         floor_plan = get_object_or_404(self.queryset.restrict(request.user, "view"), pk=pk)
         rows = [
             {
@@ -107,6 +110,9 @@ class FloorPlanTileViewSet(NautobotModelViewSet):
     @action(detail=False, methods=["post"])
     def place(self, request):
         """Place any registered object type on a floor plan at a normalized position."""
+        from nautobot_floor_plan.placement.config import refresh_if_stale  # noqa: PLC0415
+
+        refresh_if_stale()
         serializer = serializers.FloorPlanTilePlacementSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         tile = serializer.save()
@@ -114,3 +120,11 @@ class FloorPlanTileViewSet(NautobotModelViewSet):
             serializers.FloorPlanTileSerializer(tile, context={"request": request}).data,
             status=HTTP_201_CREATED,
         )
+
+
+class FloorPlanObjectTypeViewSet(NautobotModelViewSet):
+    """FloorPlanObjectType viewset."""
+
+    queryset = models.FloorPlanObjectType.objects.all()
+    serializer_class = serializers.FloorPlanObjectTypeSerializer
+    filterset_class = filters.FloorPlanObjectTypeFilterSet

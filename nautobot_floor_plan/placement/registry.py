@@ -64,6 +64,37 @@ class PlacementRegistry:
     def __init__(self):
         """Initialize an empty registry."""
         self._entries = {}
+        # Base layer = code builtins + other apps' push-registrations, captured once after startup so
+        # the DB-config overlay can be re-applied on runtime edits without losing those registrations.
+        self._base_snapshot = None
+        self._applied_config_version = None
+
+    @staticmethod
+    def _copy_entries(entries):
+        """Shallow-copy the entries map (PlacementType is frozen; _Entry is copied)."""
+        return {
+            key: _Entry(base=entry.base, variants=dict(entry.variants), discriminator=entry.discriminator)
+            for key, entry in entries.items()
+        }
+
+    def snapshot_base(self):
+        """Capture the current entries as the restorable base layer (idempotent: only the first call)."""
+        if self._base_snapshot is None:
+            self._base_snapshot = self._copy_entries(self._entries)
+
+    def restore_base(self):
+        """Reset entries to the captured base layer, dropping any DB-config overlay."""
+        if self._base_snapshot is not None:
+            self._entries = self._copy_entries(self._base_snapshot)
+
+    @property
+    def applied_config_version(self):
+        """The FloorPlanObjectType cache version last merged into this process, or None."""
+        return self._applied_config_version
+
+    @applied_config_version.setter
+    def applied_config_version(self, value):
+        self._applied_config_version = value
 
     @staticmethod
     def _label_for(obj):

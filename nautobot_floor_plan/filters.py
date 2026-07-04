@@ -90,3 +90,27 @@ class FloorPlanTileFilterSet(NautobotFilterSet):
             "placed_object_id",
             "tags",
         ]
+
+
+class FloorPlanObjectTypeFilterSet(NautobotFilterSet):
+    """Filter for FloorPlanObjectType."""
+
+    q = SearchFilter(
+        filter_predicates={
+            "label": "icontains",
+            "variant_key": "icontains",
+        },
+    )
+
+    class Meta:
+        """Meta attributes."""
+
+        model = models.FloorPlanObjectType
+        fields = [  # pylint: disable=nb-use-fields-all
+            "content_type",
+            "variant_key",
+            "label",
+            "override",
+            "enabled",
+            "tags",
+        ]

@@ -6,7 +6,7 @@ from django.db import IntegrityError, transaction
 from django.urls import reverse
 from nautobot.core.testing import TestCase
 from nautobot.dcim.models import Device, Location, PowerFeed, PowerPanel, Rack, RackGroup
-from nautobot.extras.models import Status
+from nautobot.extras.models import Role, Status
 from nautobot.tenancy.models import Tenant
 
 from nautobot_floor_plan import models
@@ -1195,3 +1195,106 @@ class TestLocationPlacement(TestCase):
         """A top-level Location (no parent) has no resolvable place and is rejected."""
         with self.assertRaises(ValidationError):
             self._tile(self.building_plan, self.site).validated_save()
+
+
+class TestFloorPlanObjectType(TestCase):
+    """Validation of the runtime placeable-type config model."""
+
+    def setUp(self):
+        self.ct_rack = ContentType.objects.get_for_model(Rack)
+
+    def _row(self, **kwargs):
+        defaults = {"content_type": self.ct_rack, "label": "X"}
+        defaults.update(kwargs)
+        return models.FloorPlanObjectType(**defaults)
+
+    def test_requires_single_glyph_source(self):
+        with self.assertRaises(ValidationError):
+            self._row(glyph_key="server", custom_glyph_paths=["M1 1 h2"]).validated_save()
+
+    def test_unknown_glyph_key_rejected(self):
+        with self.assertRaises(ValidationError):
+            self._row(glyph_key="not-a-real-glyph").validated_save()
+
+    def test_match_rule_requires_variant_key(self):
+        with self.assertRaises(ValidationError):
+            self._row(match_field="role.name", match_keywords=["x"]).validated_save()
+
+    def test_valid_base_row(self):
+        self._row(glyph_key="server").validated_save()  # should not raise
+
+
+class TestPlacementConfigMerge(TestCase):
+    """apply_db_config merges FloorPlanObjectType rows onto the registry's base layer."""
+
+    def setUp(self):
+        from nautobot_floor_plan.placement.config import apply_db_config
+
+        self.apply = apply_db_config
+        self.ct_rack = ContentType.objects.get_for_model(Rack)
+        self.ct_device = ContentType.objects.get_for_model(Device)
+
+    def tearDown(self):
+        # Return the process-global registry to its code/app base layer between tests.
+        models.FloorPlanObjectType.objects.all().delete()
+        self.apply()
+
+    def test_base_row_overrides_builtin(self):
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_rack, label="Custom Rack", glyph_key="cpu", color="abcdef", override=True
+        )
+        self.apply()
+        placement = registry.resolve(Rack())
+        self.assertEqual(placement.label, "Custom Rack")
+        self.assertEqual(placement.icon, "cpu")
+        self.assertEqual(placement.color, "abcdef")
+
+    def test_disabled_row_excluded(self):
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_rack, label="Nope", glyph_key="cpu", enabled=False, override=True
+        )
+        self.apply()
+        self.assertEqual(registry.resolve(Rack()).label, "Rack")  # builtin unchanged
+
+    def test_custom_glyph_row_carries_paths(self):
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_rack, label="R", custom_glyph_paths=["M9 9 h6"], override=True
+        )
+        self.apply()
+        self.assertEqual(registry.resolve(Rack()).glyph_paths_data, ["M9 9 h6"])
+
+    def test_variant_match_rule_selects_variant(self):
+        prerequisites = fixtures.create_prerequisites(floor_count=1)
+        floor, status = prerequisites["floors"][0], prerequisites["status"]
+        role = Role.objects.create(name="Infusion Pump", color="ff0000")
+        role.content_types.add(self.ct_device)
+        device = Device.objects.create(
+            name="P1", device_type=prerequisites["device_type"], role=role, status=status, location=floor
+        )
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_device, label="Device", glyph_key="cpu", override=True
+        )
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_device,
+            variant_key="pump",
+            label="Infusion Pump",
+            glyph_key="syringe",
+            match_field="role.name",
+            match_keywords=["pump"],
+            override=False,
+        )
+        self.apply()
+        placement = registry.resolve(device)
+        self.assertEqual(placement.label, "Infusion Pump")
+        self.assertEqual(placement.icon, "syringe")
+
+    def test_refresh_if_stale_reapplies_after_version_bump(self):
+        from nautobot_floor_plan.placement.config import refresh_if_stale
+
+        # Creating the row fires the post_save signal, which bumps the shared version.
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_rack, label="Fresh Rack", glyph_key="cpu", override=True
+        )
+        registry.applied_config_version = -999  # simulate a worker that hasn't merged this version
+        refresh_if_stale()
+        self.assertEqual(registry.resolve(Rack()).label, "Fresh Rack")

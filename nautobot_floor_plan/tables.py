@@ -153,3 +153,41 @@ class FloorPlanTileTable(BaseTable):
             "tags",
             "actions",
         )
+
+
+class FloorPlanObjectTypeTable(BaseTable):
+    # pylint: disable=too-few-public-methods
+    """Table for the FloorPlanObjectType list view."""
+
+    pk = ToggleColumn()
+    label = tables.Column(linkify=True)
+    content_type = tables.Column(verbose_name="Object Type")
+    actions = ButtonsColumn(models.FloorPlanObjectType)
+
+    class Meta(BaseTable.Meta):
+        """Meta attributes."""
+
+        model = models.FloorPlanObjectType
+        fields = (
+            "pk",
+            "label",
+            "content_type",
+            "variant_key",
+            "glyph_key",
+            "color",
+            "legend_order",
+            "override",
+            "enabled",
+            "tags",
+            "actions",
+        )
+        default_columns = (
+            "pk",
+            "label",
+            "content_type",
+            "variant_key",
+            "glyph_key",
+            "override",
+            "enabled",
+            "actions",
+        )

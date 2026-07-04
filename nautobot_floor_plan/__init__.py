@@ -4,7 +4,7 @@
 from importlib import metadata
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db.models.signals import post_migrate
+from django.db.models.signals import post_delete, post_migrate, post_save
 from nautobot.apps import NautobotAppConfig
 from nautobot.apps.config import get_app_settings_or_config
 
@@ -59,6 +59,8 @@ class FloorPlanConfig(NautobotAppConfig):
 
         from .placement.defaults import register_builtins  # pylint: disable=import-outside-toplevel
         from .signals import (  # pylint: disable=import-outside-toplevel
+            handle_placement_config_change,
+            post_migrate_apply_placement_config,
             post_migrate_create__add_statuses,
         )
 
@@ -67,6 +69,14 @@ class FloorPlanConfig(NautobotAppConfig):
         # Register the native placeable types (rack/device/power panel/power feed). Other apps push
         # their own registrations from their ready(); floor-plan never imports them.
         register_builtins()
+
+        # Merge admin-defined FloorPlanObjectType rows over the code/app registrations after migrate
+        # (safe: tables exist and every app's ready() has run). Runtime edits bump a cache version
+        # that each worker re-merges lazily via placement.config.refresh_if_stale().
+        post_migrate.connect(post_migrate_apply_placement_config, sender=self)
+        object_type_model = self.get_model("FloorPlanObjectType")
+        post_save.connect(handle_placement_config_change, sender=object_type_model)
+        post_delete.connect(handle_placement_config_change, sender=object_type_model)
 
         self.validate_config_options()
 

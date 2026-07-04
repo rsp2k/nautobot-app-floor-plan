@@ -1102,6 +1102,10 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
     def render(self):
         """Generate an SVG document representing a FloorPlan."""
         logger.debug("Setting up drawing...")
+        # Pick up any admin FloorPlanObjectType edits made in another worker before we resolve glyphs.
+        from nautobot_floor_plan.placement.config import refresh_if_stale  # noqa: PLC0415
+
+        refresh_if_stale()
         self._present_types = {}
         default_width = self.floor_plan.x_size * self.GRID_SIZE_X + self.GRID_OFFSET + self.BORDER_WIDTH * 2
         default_depth = self.floor_plan.y_size * self.GRID_SIZE_Y + self.GRID_OFFSET + self.BORDER_WIDTH * 2

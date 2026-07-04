@@ -202,3 +202,13 @@ class PlaceableTypeSerializer(serializers.Serializer):  # pylint: disable=abstra
     color = serializers.CharField(allow_null=True)
     legend_order = serializers.IntegerField()
     object_source = serializers.DictField()
+
+
+class FloorPlanObjectTypeSerializer(NautobotModelSerializer, TaggedModelSerializerMixin):
+    """FloorPlanObjectType Serializer."""
+
+    class Meta:
+        """Meta attributes."""
+
+        model = models.FloorPlanObjectType
+        fields = "__all__"

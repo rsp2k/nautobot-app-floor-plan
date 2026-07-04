@@ -740,3 +740,57 @@ CustomLabelRangeFormSetNoExtra = formset_factory(
     can_delete=True,
     validate_min=False,
 )
+
+
+class FloorPlanObjectTypeForm(NautobotModelForm):
+    """Create/edit form for a runtime placeable-type config."""
+
+    class Meta:
+        """Meta attributes."""
+
+        model = models.FloorPlanObjectType
+        fields = [
+            "content_type",
+            "variant_key",
+            "label",
+            "color",
+            "glyph_key",
+            "custom_glyph_paths",
+            "glyph_viewbox",
+            "legend_order",
+            "location_field",
+            "match_field",
+            "match_keywords",
+            "match_precedence",
+            "override",
+            "enabled",
+            "tags",
+        ]
+
+
+class FloorPlanObjectTypeFilterForm(NautobotFilterForm):  # pylint: disable=too-many-ancestors
+    """Filter form for FloorPlanObjectType."""
+
+    model = models.FloorPlanObjectType
+    field_order = ["q", "content_type", "enabled", "override"]
+
+    q = forms.CharField(required=False, label="Search")
+    enabled = forms.NullBooleanField(required=False)
+    override = forms.NullBooleanField(required=False)
+    tag = TagFilterField(model)
+
+
+class FloorPlanObjectTypeBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):  # pylint: disable=too-many-ancestors
+    """Bulk edit form for FloorPlanObjectType."""
+
+    pk = forms.ModelMultipleChoiceField(
+        queryset=models.FloorPlanObjectType.objects.all(), widget=forms.MultipleHiddenInput
+    )
+    color = forms.CharField(max_length=6, required=False)
+    legend_order = forms.IntegerField(required=False)
+    enabled = forms.NullBooleanField(required=False)
+
+    class Meta:
+        """Meta attributes."""
+
+        fields = ["pk", "color", "legend_order", "enabled", "tags"]
