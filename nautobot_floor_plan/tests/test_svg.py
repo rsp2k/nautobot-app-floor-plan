@@ -16,6 +16,7 @@ from rest_framework.test import APIClient
 from nautobot_floor_plan import models, svg
 from nautobot_floor_plan.choices import ObjectOrientationChoices, PlacementModeChoices
 from nautobot_floor_plan.placement import registry
+from nautobot_floor_plan.placement.config import current_config_version
 from nautobot_floor_plan.placement.icons import ICON_GLYPHS, ICON_VIEWBOX, resolve_glyph
 from nautobot_floor_plan.placement.registry import PlacementType
 from nautobot_floor_plan.tests import fixtures
@@ -819,6 +820,10 @@ class TestGlyphAndColorResolvers(TestCase):
             "dcim.rack", label="Rack", icon="server", color="6c757d",
             legend_order=10, glyph_paths_data=[marker], replace=True,
         )
+        # render() calls refresh_if_stale(); if a prior test bumped the DB-config version this would
+        # restore_base() and wipe the manual registration above. Align the applied version so the
+        # lazy refresh is a no-op and we render exactly the glyph-as-data we just registered.
+        registry.applied_config_version = current_config_version()
         try:
             rack = Rack.objects.create(name="GlyphRack", status=self.status, location=self.floor)
             models.FloorPlanTile(

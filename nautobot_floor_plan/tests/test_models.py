@@ -1298,3 +1298,23 @@ class TestPlacementConfigMerge(TestCase):
         registry.applied_config_version = -999  # simulate a worker that hasn't merged this version
         refresh_if_stale()
         self.assertEqual(registry.resolve(Rack()).label, "Fresh Rack")
+
+    def test_location_field_drives_relational_resolution(self):
+        """A row's location_field resolves the Location through a relation (not just obj.location).
+
+        PowerFeed has no direct .location (it's at power_panel.location) — the same shape as a
+        MedicalDevice reaching its Location via device.location.
+        """
+        prerequisites = fixtures.create_prerequisites(floor_count=1)
+        floor, status = prerequisites["floors"][0], prerequisites["status"]
+        panel = PowerPanel.objects.create(name="CfgPanel", location=floor)
+        feed = PowerFeed.objects.create(name="CfgFeed", power_panel=panel, status=status)
+        models.FloorPlanObjectType.objects.create(
+            content_type=ContentType.objects.get_for_model(PowerFeed),
+            label="Feed",
+            glyph_key="plug",
+            location_field="power_panel__location",
+            override=True,
+        )
+        self.apply()
+        self.assertEqual(registry.resolve_location(feed), floor)

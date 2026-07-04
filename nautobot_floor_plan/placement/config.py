@@ -46,6 +46,26 @@ def _read_attr(obj, dotted):
     return current
 
 
+def _location_resolver_for(location_field):
+    """Build a Location resolver that traverses the configured ORM path (e.g. 'device__location').
+
+    So a DB-configured type whose object reaches its Location through a relation (a MedicalDevice
+    via its Device, a PowerFeed via its PowerPanel) resolves correctly, not just objects with a
+    literal ``.location``. For the default 'location' this is equivalent to ``obj.location``.
+    """
+    parts = location_field.split("__")
+
+    def resolver(obj):
+        current = obj
+        for part in parts:
+            current = getattr(current, part, None)
+            if current is None:
+                return None
+        return current
+
+    return resolver
+
+
 def _make_discriminator(rows):
     """Build an ``obj -> variant_key`` callable from DB variant rows (field + keyword + precedence)."""
     ordered = sorted(rows, key=lambda r: r.match_precedence)
@@ -89,6 +109,7 @@ def apply_db_config():
             color=row.color or None,
             legend_order=row.legend_order,
             location_field=row.location_field,
+            location_resolver=_location_resolver_for(row.location_field),
             glyph_paths_data=row.custom_glyph_paths or None,
             glyph_viewbox=row.glyph_viewbox,
             replace=row.override,
