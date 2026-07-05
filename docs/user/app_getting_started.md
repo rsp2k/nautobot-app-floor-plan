@@ -285,13 +285,15 @@ In **freeform** mode, objects are not confined to grid cells. This is the mode t
 
 A freeform plan can carry a background image (for example a floor plan export, a CAD drawing rendered to an image, or an architectural PDF page saved as an image). The image renders behind the grid and never intercepts clicks in view mode, and a **Blueprint opacity** slider controls how prominent it is.
 
-![Freeform floor plan on a blueprint background](../images/freeform-blueprint.png){ .on-glb }
+![Freeform floor plan on a blueprint background](../images/freeform-blueprint-light.png#only-light){ .on-glb }
+![Freeform floor plan on a blueprint background](../images/freeform-blueprint-dark.png#only-dark){ .on-glb }
 
 ### Calibrating the Image
 
 Switch the plan into **calibrate** mode to align the image with the grid. You can drag the image to move it, drag its corner handles to scale it, and use the rotate handle to spin it so the drawing's orientation matches your coordinate system. Calibration is saved with the Floor Plan.
 
-![Calibrating the blueprint image](../images/freeform-calibrate.png){ .on-glb }
+![Calibrating the blueprint image](../images/freeform-calibrate-light.png#only-light){ .on-glb }
+![Calibrating the blueprint image](../images/freeform-calibrate-dark.png#only-dark){ .on-glb }
 
 ### Placing and Moving Objects
 
@@ -309,7 +311,8 @@ Each record maps a Nautobot content type to a presentation:
 - **Override**: when enabled, your definition replaces the built-in one for that content type.
 - **Variant matching** *(optional)*: pair a match field and keywords to give sub-types (for example a device Role) their own glyph and color.
 
-![Floor Plan Object Type form](../images/object-type-form.png){ .on-glb }
+![Floor Plan Object Type form](../images/object-type-form-light.png#only-light){ .on-glb }
+![Floor Plan Object Type form](../images/object-type-form-dark.png#only-dark){ .on-glb }
 
 !!! note
     A live object's Status color takes precedence over the type color, so a faulted or decommissioning object still reads as its status on the plan.
