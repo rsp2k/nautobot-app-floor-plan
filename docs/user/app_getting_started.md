@@ -44,6 +44,13 @@ Clicking this button will open a standard Nautobot create/edit form. This form a
     - This feature is a optional setting to assist with Custom Label creation
     - Default: `"True"`
 
+- **Placement Mode**:
+  Choose how objects are positioned on this plan.
+    - `Grid`: objects snap to grid cells (the classic behavior).
+    - `Freeform`: objects can be placed at any position, optionally over a blueprint background image.
+    - Default: `"Grid"`
+    - An existing grid plan can be converted to freeform later without recreating it.
+
 ![Add Floor Plan form](../images/add-floor-plan-form-light.png#only-light){ .on-glb }
 ![Add Floor Plan form](../images/add-floor-plan-form-dark.png#only-dark){ .on-glb }
 
@@ -271,3 +278,40 @@ Once tiles have been added, the floor plan can no longer be resized.
 
 - This restriction prevents resizing that could place tiles outside the new dimensions.
 - To change the floor plan's dimensions, you must: Remove all tiles, or Delete and recreate the floor plan.
+
+## Freeform Placement and Blueprint Backgrounds
+
+When a Floor Plan uses **Freeform** placement mode, objects are not confined to grid cells. This is the mode to use when you want markers to sit exactly where equipment physically is, especially over an image of the real space.
+
+### Adding a Blueprint Background
+
+Edit the Floor Plan and upload a background image (for example a floor plan export, a CAD drawing rendered to an image, or an architectural PDF page saved as an image). The image renders behind the grid and never intercepts clicks in view mode.
+
+![Freeform floor plan on a blueprint background](../images/freeform-blueprint.png){ .on-glb }
+
+### Calibrating the Image
+
+Switch the plan into calibrate mode to align the image with the grid. You can drag the image to move it, drag its corner handles to scale it, and use the rotate handle to spin it so the drawing's orientation matches your coordinate system. Calibration is saved with the Floor Plan.
+
+![Calibrating the blueprint image](../images/freeform-calibrate.png){ .on-glb }
+
+### Placing and Moving Objects
+
+In place mode, add an object and drop its marker anywhere on the plan. To reposition it, drag the marker to its new spot. The new position is saved as soon as you drop it, so what you see on the plan is what is stored. Each object type renders with its own icon and color, and a legend keeps types distinguishable.
+
+## Defining Placeable Object Types
+
+By default you can place Devices, Power Panels, Power Feeds, Racks, and Locations. To place other object types, or to change how any type looks, use the **Floor Plan Object Types** page under the **Organization** menu.
+
+Each record maps a Nautobot content type to a presentation:
+
+- **Glyph**: a built-in icon key, or your own SVG path data with a viewbox.
+- **Color**: the fallback swatch used when the object has no status-driven color.
+- **Legend order**: where the type appears in the on-plan legend.
+- **Override**: when enabled, your definition replaces the built-in one for that content type.
+- **Variant matching** *(optional)*: pair a match field and keywords to give sub-types (for example a device Role) their own glyph and color.
+
+![Floor Plan Object Type form](../images/object-type-form.png){ .on-glb }
+
+!!! note
+    A live object's Status color takes precedence over the type color, so a faulted or decommissioning object still reads as its status on the plan.

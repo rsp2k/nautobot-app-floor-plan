@@ -118,6 +118,7 @@ nav:
       - Compatibility Matrix: "admin/compatibility_matrix.md"
       - Release Notes:
           - "admin/release_notes/index.md"
+          - v2026.7 (Freeform fork): "admin/release_notes/version_2026.7.md"
           - v3.0: "admin/release_notes/version_3.0.md"
           - v1.0: "admin/release_notes/version_1.0.md"
           - v2.0: "admin/release_notes/version_2.0.md"
@@ -134,6 +135,15 @@ nav:
       - Contributing to the App: "dev/contributing.md"
       - Development Environment: "dev/dev_environment.md"
       - Release Checklist: "dev/release_checklist.md"
+      - Design Notes:
+          - Blueprint & Freeform Design: "dev/blueprint_freeform_design.md"
+          - Blueprint & Freeform Spec: "dev/blueprint_freeform_spec.md"
+          - Generalized Object Placement: "dev/generalized_object_placement.md"
+          - Generalized Object Placement Spec: "dev/generalized_object_placement_spec.md"
+          - Hierarchical Location Placement: "dev/hierarchical_location_placement.md"
+          - Freeform Editing (Wave D): "dev/wave_d_js_reconciled.md"
+          - Freeform Editing Spec (Wave D): "dev/wave_d_spec.md"
+          - Document Import Roadmap: "dev/document_import_roadmap.md"
       - Code Reference:
           - "dev/code_reference/index.md"
           - Package: "dev/code_reference/package.md"

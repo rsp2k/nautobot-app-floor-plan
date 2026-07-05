@@ -7,7 +7,14 @@ This document provides an overview of the App including critical information and
 
 ## Description
 
-This App is designed to extend Nautobot's built-in Location data model to allow you to define a Floor Plan for each relevant Location, consisting of a grid of Tiles, each of which has coordinates, an optional Status, and an optional association to an Object belonging to that Location in order to show the Object's position within the Floor Plan. The Floor Plan will be displayed in the Nautobot UI as a rendered SVG with built-in pan/zoom capabilities using your mouse either using the shift mouse wheel or a click and left click drag box.
+This App is designed to extend Nautobot's built-in Location data model to allow you to define a Floor Plan for each relevant Location. A Floor Plan can be laid out in two ways, and both are supported on the same plan:
+
+- **Grid mode** places objects on a grid of Tiles, each of which has coordinates, an optional Status, and an optional association to an Object belonging to that Location.
+- **Freeform mode** places objects at any position over an optional blueprint background image (a real floor plan, CAD export, or architectural drawing), so a marker can sit exactly where the equipment physically is rather than snapping to a grid cell.
+
+The Floor Plan is displayed in the Nautobot UI as a rendered SVG with built-in pan/zoom using your mouse, either with the shift mouse wheel or a click and left click drag box. In freeform mode you can drag markers directly on the plan to reposition them, and drag or rotate the blueprint image to calibrate it against the grid.
+
+Any object type can be placed, not only the built-ins. The App ships with placement support for Devices, Power Panels, Power Feeds, Racks, and Locations, and other apps can register their own object types (a medical device, a camera, an access point) so those appear as first-class placeable objects with their own icon, color, and legend entry. Placeable types and their glyphs can also be defined or overridden from the web UI without a code change.
 
 ## Audience (User Personas) - Who should use this App?
 
@@ -21,7 +28,12 @@ This App is primarily developed and maintained by Network to Code, LLC.
 
 Included is a non-exhaustive list of capabilities beyond a standard MVC (model view controller) paradigm.
 
-- Provides visualization of Objects (Devices, Power Panels, Power Feeds and Racks) on a floor map.
+- Provides visualization of Objects (Devices, Power Panels, Power Feeds, Racks, and Locations) on a floor map.
+- Provides a blueprint background image per Floor Plan, with drag and rotate calibration to align a real floor plan or CAD drawing to the grid.
+- Provides freeform placement of objects at any position on the plan, in addition to grid tiles, with drag-to-place directly on the rendered SVG.
+- Provides per-type marker icons (glyphs), colors, and an on-plan legend so different object types are distinguishable at a glance.
+- Provides the ability to define new placeable object types, glyphs, and colors from the web UI, or to override the built-in ones, without changing code.
+- Provides an extension point for other apps to register their own object types as placeable, each with its own icon and color.
 - Provides visualization of Power Panels, and Racks being assigned to a Rack Group on a floor map.
 - Provides visualization of Tenant and Tenant Groups for Objects on a floor map.
 - Provides easy navigation from floor map to Object and subsequently device from Rack.
@@ -50,7 +62,8 @@ Included is a non-exhaustive list of capabilities beyond a standard MVC (model v
 This App:
 
 - Adds a "Location Floor Plans" menu item to Nautobot's "Organization" menu.
-- Adds three new database models, "Floor Plan", "Floor Plan Tile" and "Floor Plan Custom Axis Label".
+- Adds a "Floor Plan Object Types" menu item for defining placeable types, glyphs, and colors from the UI.
+- Adds four new database models, "Floor Plan", "Floor Plan Tile", "Floor Plan Custom Axis Label", and "Floor Plan Object Type".
 - Adds UI and REST API endpoints for performing standard create/retrieve/update/delete (CRUD) operations on these models.
 - Extends the detail view of Nautobot Devices, Power Feeds, Power Panels, and Racks.
     - Includes a "View on Floor Plan" button if the Object is on a "Floor Plan Tile".
