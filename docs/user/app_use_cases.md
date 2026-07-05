@@ -24,7 +24,7 @@ The classic use case: a rectangular grid of tiles for a structured data center l
 
 ## Freeform Floor Plan on a Blueprint
 
-When you have a real floor plan image, choose freeform mode and upload it as the blueprint background. You can drag and rotate the image to calibrate it against the grid, then drop markers exactly where equipment sits and drag them to fine-tune. Each object type renders with its own icon and color, and a legend on the plan keeps them readable.
+When you have a real floor plan image, put the plan into freeform mode with that image as the blueprint background (set through the REST API in this release, or by converting an existing grid plan). You can then drag and rotate the image to calibrate it against the grid, drop markers exactly where equipment sits, and drag them to fine-tune. Each object type renders with its own icon and color, and a legend on the plan keeps them readable.
 
 ![Freeform floor plan on a blueprint background](../images/freeform-blueprint.png){ .on-glb }
 

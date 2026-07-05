@@ -44,12 +44,7 @@ Clicking this button will open a standard Nautobot create/edit form. This form a
     - This feature is a optional setting to assist with Custom Label creation
     - Default: `"True"`
 
-- **Placement Mode**:
-  Choose how objects are positioned on this plan.
-    - `Grid`: objects snap to grid cells (the classic behavior).
-    - `Freeform`: objects can be placed at any position, optionally over a blueprint background image.
-    - Default: `"Grid"`
-    - An existing grid plan can be converted to freeform later without recreating it.
+New Floor Plans are created in grid mode. Freeform placement and a blueprint background are enabled on an existing plan (see [Freeform Placement and Blueprint Backgrounds](#freeform-placement-and-blueprint-backgrounds) below).
 
 ![Add Floor Plan form](../images/add-floor-plan-form-light.png#only-light){ .on-glb }
 ![Add Floor Plan form](../images/add-floor-plan-form-dark.png#only-dark){ .on-glb }
@@ -281,23 +276,26 @@ Once tiles have been added, the floor plan can no longer be resized.
 
 ## Freeform Placement and Blueprint Backgrounds
 
-When a Floor Plan uses **Freeform** placement mode, objects are not confined to grid cells. This is the mode to use when you want markers to sit exactly where equipment physically is, especially over an image of the real space.
+In **freeform** mode, objects are not confined to grid cells. This is the mode to use when you want markers to sit exactly where equipment physically is, especially over an image of the real space.
 
-### Adding a Blueprint Background
+!!! note
+    In this release, a plan's placement mode and blueprint background are set through the REST API, not the create/edit form. Converting a grid plan to freeform is available directly from the plan view. The dedicated form controls for choosing a mode and uploading a background image are planned for a later release. The interactive tools below (calibrate, place, drag) appear on the rendered plan once it is in freeform mode.
 
-Edit the Floor Plan and upload a background image (for example a floor plan export, a CAD drawing rendered to an image, or an architectural PDF page saved as an image). The image renders behind the grid and never intercepts clicks in view mode.
+### The Blueprint Background
+
+A freeform plan can carry a background image (for example a floor plan export, a CAD drawing rendered to an image, or an architectural PDF page saved as an image). The image renders behind the grid and never intercepts clicks in view mode, and a **Blueprint opacity** slider controls how prominent it is.
 
 ![Freeform floor plan on a blueprint background](../images/freeform-blueprint.png){ .on-glb }
 
 ### Calibrating the Image
 
-Switch the plan into calibrate mode to align the image with the grid. You can drag the image to move it, drag its corner handles to scale it, and use the rotate handle to spin it so the drawing's orientation matches your coordinate system. Calibration is saved with the Floor Plan.
+Switch the plan into **calibrate** mode to align the image with the grid. You can drag the image to move it, drag its corner handles to scale it, and use the rotate handle to spin it so the drawing's orientation matches your coordinate system. Calibration is saved with the Floor Plan.
 
 ![Calibrating the blueprint image](../images/freeform-calibrate.png){ .on-glb }
 
 ### Placing and Moving Objects
 
-In place mode, add an object and drop its marker anywhere on the plan. To reposition it, drag the marker to its new spot. The new position is saved as soon as you drop it, so what you see on the plan is what is stored. Each object type renders with its own icon and color, and a legend keeps types distinguishable.
+In **place** mode, drop an object's marker anywhere on the plan and drag it to reposition. The new position is saved as soon as you drop it, so what you see on the plan is what is stored. Each object type renders with its own icon and color, and a legend keeps types distinguishable.
 
 ## Defining Placeable Object Types
 

@@ -2,7 +2,7 @@
 
 ## What is the difference between grid mode and freeform mode?
 
-Grid mode snaps every object to a cell in the X/Y grid, which is ideal for a structured data center layout where racks line up in rows. Freeform mode lets an object sit at any position on the plan, which is better when you want a marker to land exactly where equipment physically is over a real floor plan image. A single Floor Plan can use both: you choose a placement mode when you create the plan, and an existing grid plan can be converted to freeform.
+Grid mode snaps every object to a cell in the X/Y grid, which is ideal for a structured data center layout where racks line up in rows. Freeform mode lets an object sit at any position on the plan, which is better when you want a marker to land exactly where equipment physically is over a real floor plan image. New plans start in grid mode; a plan is put into freeform mode through the REST API or by converting an existing grid plan, after which the interactive place, drag, and calibrate tools appear on the rendered plan.
 
 ## Do I have to use a background image?
 
