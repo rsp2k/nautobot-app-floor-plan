@@ -4,13 +4,33 @@
 from importlib import metadata
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db.models.signals import post_migrate
+from django.db.models.signals import post_delete, post_migrate, post_save
 from nautobot.apps import NautobotAppConfig
 from nautobot.apps.config import get_app_settings_or_config
 
 from nautobot_floor_plan.choices import AxisLabelsChoices
 
-__version__ = metadata.version(__name__)
+def _resolve_version():
+    """Version from whichever distribution provides this import package.
+
+    The upstream distribution is ``nautobot-floor-plan``; this fork publishes as
+    ``nautobot-floor-plan-freeform`` (same ``nautobot_floor_plan`` import name), so a lookup by
+    the import name alone fails. Resolve via packages_distributions, then fall back to known names.
+    """
+    try:
+        for dist in metadata.packages_distributions().get(__name__, []):
+            return metadata.version(dist)
+    except Exception:  # noqa: BLE001
+        pass
+    for candidate in ("nautobot-floor-plan-freeform", "nautobot-floor-plan"):
+        try:
+            return metadata.version(candidate)
+        except metadata.PackageNotFoundError:
+            continue
+    return "0.0.0"
+
+
+__version__ = _resolve_version()
 
 
 class FloorPlanConfig(NautobotAppConfig):
@@ -57,11 +77,26 @@ class FloorPlanConfig(NautobotAppConfig):
         """Callback after app is loaded."""
         super().ready()
 
+        from .placement.defaults import register_builtins  # pylint: disable=import-outside-toplevel
         from .signals import (  # pylint: disable=import-outside-toplevel
+            handle_placement_config_change,
+            post_migrate_apply_placement_config,
             post_migrate_create__add_statuses,
         )
 
         post_migrate.connect(post_migrate_create__add_statuses, sender=self)
+
+        # Register the native placeable types (rack/device/power panel/power feed). Other apps push
+        # their own registrations from their ready(); floor-plan never imports them.
+        register_builtins()
+
+        # Merge admin-defined FloorPlanObjectType rows over the code/app registrations after migrate
+        # (safe: tables exist and every app's ready() has run). Runtime edits bump a cache version
+        # that each worker re-merges lazily via placement.config.refresh_if_stale().
+        post_migrate.connect(post_migrate_apply_placement_config, sender=self)
+        object_type_model = self.get_model("FloorPlanObjectType")
+        post_save.connect(handle_placement_config_change, sender=object_type_model)
+        post_delete.connect(handle_placement_config_change, sender=object_type_model)
 
         self.validate_config_options()
 

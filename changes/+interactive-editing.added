@@ -1,0 +1,1 @@
+Added an interactive editing layer to the floor plan: a View/Place/Calibrate mode toggle, drag-to-place object markers, drag-to-calibrate the blueprint (corner/rotate handles + live opacity), and full keyboard and screen-reader support, all layered onto the existing pan/zoom viewer.

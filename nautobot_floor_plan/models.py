@@ -1,19 +1,26 @@
 """Models for Nautobot Floor Plan."""
 
 import logging
+import math
 from dataclasses import dataclass
 
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from nautobot.apps.models import PrimaryModel, StatusField, extras_features
+from nautobot.core.models.querysets import RestrictedQuerySet
 
 from nautobot_floor_plan.choices import (
+    ORIENTATION_TO_DEGREES,
     AllocationTypeChoices,
     AxisLabelsChoices,
     CustomAxisLabelsChoices,
     ObjectOrientationChoices,
+    PlacementModeChoices,
 )
+from nautobot_floor_plan.placement import registry
 from nautobot_floor_plan.svg import FloorPlanSVG
 from nautobot_floor_plan.templatetags.seed_helpers import (
     render_axis_origin,
@@ -118,6 +125,38 @@ class FloorPlan(PrimaryModel):
     )
     is_tile_movable = models.BooleanField(default=True, help_text="Determines if Tiles can be moved once placed")
 
+    placement_mode = models.CharField(
+        max_length=10,
+        choices=PlacementModeChoices,
+        default=PlacementModeChoices.GRID,
+        help_text="Grid snaps tiles to cells. Freeform places objects at any position over a background image.",
+    )
+    show_grid = models.BooleanField(
+        default=True,
+        help_text="Show the tile grid overlay. Turn off to show only the blueprint and placed objects.",
+    )
+    background_image = models.ImageField(
+        upload_to="floor_plan_backgrounds/",
+        blank=True,
+        null=True,
+        width_field="background_image_width",
+        height_field="background_image_height",
+        help_text="Optional blueprint image rendered behind the floor plan.",
+    )
+    background_image_width = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    background_image_height = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    background_opacity = models.PositiveSmallIntegerField(
+        default=100,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Opacity of the background blueprint image, from 0 (transparent) to 100 (opaque).",
+    )
+    # Calibration: placement rectangle of the blueprint in SVG user units. Null means auto-fit to the grid extent.
+    bg_x = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint left offset in SVG units.")
+    bg_y = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint top offset in SVG units.")
+    bg_width = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint width in SVG units.")
+    bg_height = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint height in SVG units.")
+    bg_rotation = models.FloatField(default=0, help_text="Calibration: blueprint rotation in degrees.")
+
     class Meta:
         """Metaclass attributes."""
 
@@ -157,7 +196,8 @@ class FloorPlan(PrimaryModel):
 
     def update_tile_origins(self, x_initial, x_updated, y_initial, y_updated):
         """Update any existing tiles if axis_origin_seed was modified."""
-        tiles = self.tiles.all()
+        # Pure-freeform tiles have no grid origins to shift.
+        tiles = self.tiles.filter(x_origin__isnull=False, y_origin__isnull=False)
         x_delta = x_updated - x_initial
         y_delta = y_updated - y_initial
 
@@ -237,6 +277,35 @@ class FloorPlan(PrimaryModel):
             for tile in tiles:
                 tile.validated_save()
 
+    def convert_to_freeform(self, *, force=False, save=True):
+        """Seed freeform coordinates for grid tiles from their grid cells.
+
+        Positions are center-anchored and normalized to the content rect, matching the renderer. This
+        is idempotent (already-seeded tiles are skipped unless ``force``) and reversible: grid origins
+        are never touched, so a plan can be switched back to grid mode without data loss. Returns the
+        list of modified tiles.
+        """
+        x_total, y_total = self.x_size, self.y_size  # >= 1 via MinValueValidator, so no divide-by-zero
+        modified = []
+        for tile in self.tiles.filter(x_origin__isnull=False, y_origin__isnull=False):
+            if not force and tile.pos_x is not None and tile.pos_y is not None:
+                continue
+            col = tile.x_origin - self.x_origin_seed
+            row = tile.y_origin - self.y_origin_seed
+            tile.pos_x = (col + 0.5 * tile.x_size) / x_total
+            tile.pos_y = (row + 0.5 * tile.y_size) / y_total
+            tile.width = tile.x_size / x_total
+            tile.height = tile.y_size / y_total
+            tile.rotation = ORIENTATION_TO_DEGREES.get(tile.object_orientation, 0)
+            modified.append(tile)
+        if save and modified:
+            with transaction.atomic():
+                for tile in modified:
+                    # In-range by construction (validate_tile_placement bounds), so save the geometry
+                    # fields directly rather than re-running grid overlap validation.
+                    tile.save(update_fields=["pos_x", "pos_y", "width", "height", "rotation"])
+        return modified
+
 
 @extras_features(
     "custom_fields",
@@ -308,6 +377,17 @@ class FloorPlanCustomAxisLabel(models.Model):
                 self.floor_plan.y_origin_seed = 1
 
 
+class FloorPlanTileQuerySet(RestrictedQuerySet):
+    """QuerySet adding a generic reverse lookup for placed objects."""
+
+    def for_object(self, obj):
+        """Return the tile(s) placing a given object (via the generic placement pair)."""
+        if obj is None or obj.pk is None:
+            return self.none()
+        content_type = ContentType.objects.get_for_model(obj)
+        return self.filter(placed_content_type=content_type, placed_object_id=obj.pk)
+
+
 @extras_features(
     "custom_fields",
     # "custom_links",  Not really needed since this doesn't have distinct views.
@@ -325,8 +405,11 @@ class FloorPlanTile(PrimaryModel):
     floor_plan = models.ForeignKey(to=FloorPlan, on_delete=models.CASCADE, related_name="tiles")
     # TODO: for efficiency we could consider using something like GeoDjango, rather than inventing geometry from
     # first principles, but since that requires changing settings.DATABASES and installing libraries, avoid it for now.
-    x_origin = models.PositiveSmallIntegerField(validators=[MinValueValidator(0)])
-    y_origin = models.PositiveSmallIntegerField(validators=[MinValueValidator(0)])
+    # Nullable so a plan can hold pure-freeform tiles (positioned only by pos_x/pos_y). Grid tiles
+    # and grid-to-freeform conversions keep their origins. The Meta CheckConstraint enforces that the
+    # pair is set together or not at all.
+    x_origin = models.PositiveSmallIntegerField(validators=[MinValueValidator(0)], blank=True, null=True)
+    y_origin = models.PositiveSmallIntegerField(validators=[MinValueValidator(0)], blank=True, null=True)
     x_size = models.PositiveSmallIntegerField(
         validators=[MinValueValidator(1)],
         default=1,
@@ -374,6 +457,25 @@ class FloorPlanTile(PrimaryModel):
         related_name="rack_groups",
     )
 
+    # Generic placement target: lets a tile place ANY object type, not just the four typed FKs above.
+    # The typed FKs remain the write path during the transition and are mirrored into this pair.
+    # on_delete=CASCADE (not PROTECT) so a removed ContentType (e.g. an uninstalled app) doesn't block
+    # `remove_stale_contenttypes`; the orphaned tile is cleaned up with it.
+    placed_content_type = models.ForeignKey(
+        to="contenttypes.ContentType",
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        related_name="floor_plan_tiles",
+    )
+    placed_object_id = models.UUIDField(blank=True, null=True, db_index=True)
+    placed_object = GenericForeignKey("placed_content_type", "placed_object_id")
+    # Denormalized display for the placed object, kept in sync on save. Enables sorting/searching a
+    # table of heterogeneous placed types without joining arbitrary target tables.
+    placed_label = models.CharField(max_length=255, blank=True, db_index=True)
+
+    objects = models.Manager.from_queryset(FloorPlanTileQuerySet)()
+
     object_orientation = models.CharField(
         max_length=10,
         choices=ObjectOrientationChoices,
@@ -391,11 +493,58 @@ class FloorPlanTile(PrimaryModel):
         default=False, blank=True, help_text="Determines if a tile is placed on top of another tile"
     )
 
+    # Freeform placement: normalized position and size relative to the blueprint extent (0..1).
+    # Populated when the parent FloorPlan is in freeform mode; null for pure grid tiles.
+    pos_x = models.FloatField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
+        help_text="Freeform X position (object center), normalized 0..1 across the content rect width.",
+    )
+    pos_y = models.FloatField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
+        help_text="Freeform Y position (object center), normalized 0..1 across the content rect height.",
+    )
+    width = models.FloatField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0)],
+        help_text="Freeform width, normalized to the content rect width (may exceed 1 near an edge).",
+    )
+    height = models.FloatField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0)],
+        help_text="Freeform height, normalized to the content rect height (may exceed 1 near an edge).",
+    )
+    rotation = models.FloatField(default=0, help_text="Freeform rotation in degrees, clockwise.")
+
     class Meta:
         """Metaclass attributes."""
 
         ordering = ["floor_plan", "y_origin", "x_origin"]
         unique_together = ["floor_plan", "x_origin", "y_origin", "allocation_type"]
+        constraints = [
+            models.CheckConstraint(
+                name="floorplantile_origin_pairing",
+                check=models.Q(x_origin__isnull=False, y_origin__isnull=False)
+                | models.Q(x_origin__isnull=True, y_origin__isnull=True),
+            ),
+            models.CheckConstraint(
+                name="floorplantile_placed_object_pairing",
+                check=models.Q(placed_content_type__isnull=False, placed_object_id__isnull=False)
+                | models.Q(placed_content_type__isnull=True, placed_object_id__isnull=True),
+            ),
+            # A given object may sit on at most one tile. Plain (not partial) unique constraint so it
+            # is portable to MySQL; NULLs are distinct on both backends, so multiple object-less
+            # (rackgroup/status) tiles coexist.
+            models.UniqueConstraint(
+                fields=["placed_content_type", "placed_object_id"],
+                name="floorplantile_unique_placed_object",
+            ),
+        ]
 
     def allocation_type_assignment(self):
         """Assign the appropriate tile allocation type when saving in clean."""
@@ -407,10 +556,50 @@ class FloorPlanTile(PrimaryModel):
             self.allocation_type = AllocationTypeChoices.RACKGROUP
         if any([self.rack, self.device, self.power_panel, self.power_feed]):
             self.allocation_type = AllocationTypeChoices.OBJECT
+        # A generic placement (no typed FK) is still an object tile.
+        if self.placed_object_id is not None and self._typed_object() is None:
+            self.allocation_type = AllocationTypeChoices.OBJECT
 
         # Ensure new tiles with just a status get an allocation type
         if not self.allocation_type and self.status:
             self.allocation_type = AllocationTypeChoices.RACKGROUP
+
+    def _typed_object(self):
+        """Return the object held by a legacy typed FK, if any (rack/device/power panel/feed)."""
+        for obj in (self.rack, self.device, self.power_panel, self.power_feed):
+            if obj is not None:
+                return obj
+        return None
+
+    def _has_placed_object(self):
+        """Whether this tile places an object, via either a typed FK or the generic pair."""
+        return self.placed_object_id is not None or self._typed_object() is not None
+
+    def _sync_placed_object_from_typed(self):
+        """Mirror a set legacy typed FK into the generic placement pair.
+
+        During the transition the typed FK is the write path; this keeps the generic pair (and its
+        uniqueness guarantee) consistent. Generic-only placement is managed directly by later waves.
+        """
+        typed = self._typed_object()
+        if typed is not None:
+            self.placed_content_type = ContentType.objects.get_for_model(typed)
+            self.placed_object_id = typed.pk
+
+    def _update_placed_label(self):
+        """Refresh the denormalized display label for the placed object."""
+        obj = self._typed_object() or self.placed_object
+        if obj is None:
+            self.placed_label = ""
+            return
+        name = getattr(obj, "name", None) or str(obj)
+        self.placed_label = str(name)[:255]
+
+    def save(self, *args, **kwargs):
+        """Keep the generic placement pair and display label in sync on every save."""
+        self._sync_placed_object_from_typed()
+        self._update_placed_label()
+        super().save(*args, **kwargs)
 
     def validate_tile_placement(self):
         """Check that tile fits within the floorplan."""
@@ -459,13 +648,66 @@ class FloorPlanTile(PrimaryModel):
         """
         super().clean()
         FloorPlanTile.allocation_type_assignment(self)
-        FloorPlanTile.validate_tile_placement(self)
+        self._validate_freeform()
+
+        grid_positioned = self.x_origin is not None and self.y_origin is not None
+        freeform_mode = self.floor_plan.placement_mode == PlacementModeChoices.FREEFORM
+        if grid_positioned:
+            # Bounds are always meaningful when origins are set; skipping them would let stale data drift.
+            FloorPlanTile.validate_tile_placement(self)
+            # Grid cell-collision rules only apply in grid mode. In freeform mode physical adjacency
+            # (and overlap) is intentional, so these are suppressed even for converted tiles.
+            if not freeform_mode:
+                self._validate_tile_overlaps()
+                self._validate_rack_rackgroup()
 
         self._validate_installed_objects()
         self._validate_object_locations()
-        self._validate_tile_overlaps()
-        self._validate_rack_rackgroup()
         self._validate_single_object_assignment()
+        self._validate_generic_placement()
+
+    def _validate_generic_placement(self):
+        """Validate a generic-only placed object (no typed FK): registered, resolvable, right location."""
+        if self._typed_object() is not None or self.placed_object_id is None:
+            return
+        obj = self.placed_object
+        if obj is None:
+            return  # dangling id is caught by the pairing constraint / referential checks
+        placement = registry.resolve(obj)
+        if placement is None:
+            raise ValidationError({"placed_content_type": f"{obj._meta.label} is not a registered placeable type."})
+        location = registry.resolve_location(obj)
+        if location is None:
+            raise ValidationError(
+                {"placed_object_id": f"{obj} has no resolvable Location; link it to a Device or set its site first."}
+            )
+        if location != self.floor_plan.location:
+            raise ValidationError(
+                {"placed_object_id": f"{obj} must belong to Location {self.floor_plan.location}, not {location}."}
+            )
+
+    def _validate_freeform(self):
+        """Validate freeform placement coordinates when present."""
+        if self.pos_x is None and self.pos_y is None:
+            return
+        if self.pos_x is None or self.pos_y is None:
+            raise ValidationError({"pos_x": "Both pos_x and pos_y are required for freeform placement."})
+        for field in ("pos_x", "pos_y"):
+            value = getattr(self, field)
+            if not math.isfinite(value):
+                raise ValidationError({field: "Must be a finite number."})
+            if not 0 <= value <= 1:
+                raise ValidationError({field: "Must be between 0 and 1."})
+        for field in ("width", "height"):
+            value = getattr(self, field)
+            if value is None:
+                continue
+            if not math.isfinite(value):
+                raise ValidationError({field: "Must be a finite number."})
+            if value <= 0:
+                raise ValidationError({field: "Must be greater than 0."})
+        if self.rotation is not None and math.isfinite(self.rotation):
+            self.rotation %= 360
 
     def _validate_installed_objects(self):
         """Validate that devices aren't installed in racks."""
@@ -611,4 +853,93 @@ class FloorPlanTile(PrimaryModel):
 
     def __str__(self):
         """Stringify instance."""
+        if self.x_origin is None or self.y_origin is None:
+            return f"Tile (freeform {self.pos_x}, {self.pos_y}) in {self.floor_plan}"
         return f"Tile ({render_axis_origin(self, 'X')}, {render_axis_origin(self, 'Y')}), ({self.x_size},{self.y_size}) in {self.floor_plan}"
+
+
+@extras_features(
+    "custom_fields",
+    "custom_validators",
+    "export_templates",
+    "graphql",
+    "relationships",
+    "webhooks",
+)
+class FloorPlanObjectType(PrimaryModel):
+    """Admin-defined placeable-type config, merged into the placement registry at runtime.
+
+    Lets operators add or override how an object type (or a variant of it) is placed and drawn on a
+    floor plan — label, glyph, color, legend order — with no code change. External apps can still
+    push their own registrations; a row here with ``override=True`` wins over those.
+    """
+
+    content_type = models.ForeignKey(
+        to=ContentType,
+        on_delete=models.CASCADE,
+        related_name="floor_plan_object_types",
+        help_text="The placeable model this config applies to (e.g. dcim.device).",
+    )
+    variant_key = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="If set, defines a variant of the base type, selected by the match rule below.",
+    )
+    label = models.CharField(max_length=100)
+    color = models.CharField(max_length=6, blank=True, help_text="Hex color, no leading '#'.")
+    glyph_key = models.CharField(max_length=50, blank=True, help_text="Name of a built-in floor-plan glyph.")
+    custom_glyph_paths = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="List of SVG path 'd' strings; overrides glyph_key when set.",
+    )
+    glyph_viewbox = models.PositiveSmallIntegerField(default=24)
+    legend_order = models.IntegerField(default=100)
+    location_field = models.CharField(
+        max_length=100,
+        default="location",
+        help_text="ORM path from the object to its Location (e.g. power_panel__location).",
+    )
+    match_field = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="For a variant: dotted attribute read from the object (e.g. role.name).",
+    )
+    match_keywords = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="For a variant: list of substrings that select this variant.",
+    )
+    match_precedence = models.IntegerField(default=100, help_text="Lower runs first when variants compete.")
+    override = models.BooleanField(default=True, help_text="Replace an existing code/app registration for this type.")
+    enabled = models.BooleanField(default=True)
+
+    class Meta:
+        """Meta attributes."""
+
+        ordering = ["content_type", "legend_order", "label"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["content_type", "variant_key"],
+                name="floorplanobjecttype_unique_type_variant",
+            ),
+        ]
+
+    def __str__(self):
+        """Stringify instance."""
+        suffix = f" [{self.variant_key}]" if self.variant_key else ""
+        return f"{self.label} ({self.content_type.app_label}.{self.content_type.model}){suffix}"
+
+    def clean(self):
+        """Validate the glyph source and the variant match-rule pairing."""
+        super().clean()
+        from nautobot_floor_plan.placement.icons import ICON_GLYPHS  # noqa: PLC0415  local: keep import light
+
+        if self.glyph_key and self.custom_glyph_paths:
+            raise ValidationError("Set either a built-in glyph_key OR custom_glyph_paths, not both.")
+        if self.glyph_key and self.glyph_key not in ICON_GLYPHS:
+            raise ValidationError({"glyph_key": f"Unknown built-in glyph '{self.glyph_key}'."})
+        if bool(self.match_field) != bool(self.match_keywords):
+            raise ValidationError("match_field and match_keywords must be set together.")
+        if (self.match_field or self.match_keywords) and not self.variant_key:
+            raise ValidationError("A match rule (match_field/match_keywords) requires a variant_key.")

@@ -1,10 +1,17 @@
 """Test FloorPlan."""
 
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
+from django.urls import reverse
 from nautobot.core.testing import TestCase
 from nautobot.dcim.models import Device, Location, PowerFeed, PowerPanel, Rack, RackGroup
+from nautobot.extras.models import Role, Status
+from nautobot.tenancy.models import Tenant
 
 from nautobot_floor_plan import models
+from nautobot_floor_plan.choices import ObjectOrientationChoices, PlacementModeChoices
+from nautobot_floor_plan.placement import registry
 from nautobot_floor_plan.tests import fixtures
 
 
@@ -858,3 +865,456 @@ class TestFloorPlanTilePower(TestCase):
         )
         with self.assertRaisesRegex(ValidationError, "Object tiles cannot overlap"):
             invalid_panel_tile.clean()
+
+
+class TestFreeformPlacement(TestCase):
+    """Test freeform placement, validation, and grid-to-freeform conversion."""
+
+    def setUp(self):
+        """Set up prerequisites."""
+        prerequisites = fixtures.create_prerequisites(floor_count=3)
+        self.status = prerequisites["status"]
+        self.floors = prerequisites["floors"]
+
+    def _grid_plan(self, **kwargs):
+        return models.FloorPlan.objects.create(
+            location=self.floors[0], x_size=5, y_size=5, x_origin_seed=1, y_origin_seed=1, **kwargs
+        )
+
+    def test_convert_to_freeform_center_anchored(self):
+        """Conversion seeds center-anchored, content-rect-normalized coordinates from grid cells."""
+        plan = self._grid_plan()
+        tile = models.FloorPlanTile(floor_plan=plan, x_origin=2, y_origin=3, status=self.status)
+        tile.validated_save()
+
+        modified = plan.convert_to_freeform()
+
+        self.assertEqual(len(modified), 1)
+        tile.refresh_from_db()
+        # col=1, row=2, x_size=y_size=1, totals=5.
+        self.assertAlmostEqual(tile.pos_x, (1 + 0.5) / 5)
+        self.assertAlmostEqual(tile.pos_y, (2 + 0.5) / 5)
+        self.assertAlmostEqual(tile.width, 1 / 5)
+        self.assertAlmostEqual(tile.height, 1 / 5)
+        # Grid origins are retained (reversible).
+        self.assertEqual((tile.x_origin, tile.y_origin), (2, 3))
+
+    def test_convert_seeds_rotation_from_orientation(self):
+        """Conversion seeds rotation from the tile's discrete orientation."""
+        plan = self._grid_plan()
+        rack = Rack.objects.create(name="RR", status=self.status, location=self.floors[0])
+        tile = models.FloorPlanTile(
+            floor_plan=plan,
+            x_origin=1,
+            y_origin=1,
+            status=self.status,
+            rack=rack,
+            object_orientation=ObjectOrientationChoices.LEFT,
+        )
+        tile.validated_save()
+        plan.convert_to_freeform()
+        tile.refresh_from_db()
+        self.assertEqual(tile.rotation, 270)
+
+    def test_convert_is_idempotent_and_forceable(self):
+        """A second conversion skips seeded tiles unless forced."""
+        plan = self._grid_plan()
+        tile = models.FloorPlanTile(floor_plan=plan, x_origin=2, y_origin=2, status=self.status)
+        tile.validated_save()
+        plan.convert_to_freeform()
+
+        # Manual edit that a plain re-convert must preserve.
+        tile.refresh_from_db()
+        tile.pos_x = 0.9
+        tile.save(update_fields=["pos_x"])
+
+        self.assertEqual(plan.convert_to_freeform(), [])  # already seeded -> skipped
+        tile.refresh_from_db()
+        self.assertAlmostEqual(tile.pos_x, 0.9)
+
+        self.assertEqual(len(plan.convert_to_freeform(force=True)), 1)  # forced -> re-seeded
+        tile.refresh_from_db()
+        self.assertAlmostEqual(tile.pos_x, (1 + 0.5) / 5)
+
+    def test_pos_out_of_range_rejected(self):
+        """pos_x/pos_y outside 0..1 fail validation."""
+        plan = self._grid_plan(placement_mode=PlacementModeChoices.FREEFORM)
+        tile = models.FloorPlanTile(floor_plan=plan, x_origin=1, y_origin=1, status=self.status, pos_x=1.5, pos_y=0.5)
+        with self.assertRaises(ValidationError):
+            tile.validated_save()
+
+    def test_pos_pairing_required(self):
+        """Setting only one of pos_x/pos_y is rejected."""
+        plan = self._grid_plan(placement_mode=PlacementModeChoices.FREEFORM)
+        tile = models.FloorPlanTile(floor_plan=plan, x_origin=1, y_origin=1, status=self.status, pos_x=0.5)
+        with self.assertRaises(ValidationError):
+            tile.validated_save()
+
+    def test_width_zero_rejected(self):
+        """A non-positive footprint is rejected."""
+        plan = self._grid_plan(placement_mode=PlacementModeChoices.FREEFORM)
+        tile = models.FloorPlanTile(
+            floor_plan=plan, x_origin=1, y_origin=1, status=self.status, pos_x=0.5, pos_y=0.5, width=0
+        )
+        with self.assertRaises(ValidationError):
+            tile.validated_save()
+
+    def test_origin_pairing_constraint(self):
+        """A half-null grid origin is rejected by the pairing constraint."""
+        plan = self._grid_plan(placement_mode=PlacementModeChoices.FREEFORM)
+        tile = models.FloorPlanTile(
+            floor_plan=plan, x_origin=1, y_origin=None, status=self.status, pos_x=0.5, pos_y=0.5
+        )
+        with self.assertRaises((ValidationError, IntegrityError)):
+            with transaction.atomic():
+                tile.validated_save()
+
+    def test_overlap_allowed_in_freeform_mode(self):
+        """Overlapping object footprints are allowed in freeform mode (rejected in grid mode)."""
+        rack_a = Rack.objects.create(name="RA", status=self.status, location=self.floors[0])
+        rack_b = Rack.objects.create(name="RB", status=self.status, location=self.floors[0])
+
+        # Grid mode: a 2-wide tile then a tile inside its span overlap and are rejected.
+        grid_plan = self._grid_plan()
+        models.FloorPlanTile(
+            floor_plan=grid_plan, x_origin=1, y_origin=1, x_size=2, status=self.status, rack=rack_a
+        ).validated_save()
+        with self.assertRaisesRegex(ValidationError, "Object tiles cannot overlap"):
+            models.FloorPlanTile(
+                floor_plan=grid_plan, x_origin=2, y_origin=1, status=self.status, rack=rack_b
+            ).validated_save()
+
+        # Freeform mode: the same overlapping geometry saves without error.
+        free_plan = models.FloorPlan.objects.create(
+            location=self.floors[1],
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        rack_c = Rack.objects.create(name="RC", status=self.status, location=self.floors[1])
+        rack_d = Rack.objects.create(name="RD", status=self.status, location=self.floors[1])
+        models.FloorPlanTile(
+            floor_plan=free_plan, x_origin=1, y_origin=1, x_size=2, status=self.status, rack=rack_c
+        ).validated_save()
+        # Should not raise.
+        models.FloorPlanTile(
+            floor_plan=free_plan, x_origin=2, y_origin=1, status=self.status, rack=rack_d
+        ).validated_save()
+
+
+class TestGenericPlacement(TestCase):
+    """Test the generic placement pair mirrored from the legacy typed FKs (Wave G1)."""
+
+    def setUp(self):
+        """Set up a plan and prerequisites."""
+        prerequisites = fixtures.create_prerequisites(floor_count=2)
+        self.status = prerequisites["status"]
+        self.floors = prerequisites["floors"]
+        self.plan = models.FloorPlan.objects.create(
+            location=self.floors[0], x_size=5, y_size=5, x_origin_seed=1, y_origin_seed=1
+        )
+
+    def test_typed_fk_mirrors_to_generic_pair_and_label(self):
+        """Saving a tile with a typed FK populates the generic pair and the display label."""
+        rack = Rack.objects.create(name="MirrorRack", status=self.status, location=self.floors[0])
+        tile = models.FloorPlanTile(floor_plan=self.plan, x_origin=1, y_origin=1, status=self.status, rack=rack)
+        tile.validated_save()
+        tile.refresh_from_db()
+        self.assertEqual(tile.placed_content_type, ContentType.objects.get_for_model(Rack))
+        self.assertEqual(tile.placed_object_id, rack.pk)
+        self.assertEqual(tile.placed_object, rack)
+        self.assertEqual(tile.placed_label, "MirrorRack")
+
+    def test_for_object_reverse_lookup(self):
+        """objects.for_object() finds the placing tile, and is empty for None/unsaved objects."""
+        rack = Rack.objects.create(name="LookupRack", status=self.status, location=self.floors[0])
+        tile = models.FloorPlanTile(floor_plan=self.plan, x_origin=2, y_origin=1, status=self.status, rack=rack)
+        tile.validated_save()
+        self.assertEqual(models.FloorPlanTile.objects.for_object(rack).first(), tile)
+        self.assertFalse(models.FloorPlanTile.objects.for_object(None).exists())
+        self.assertFalse(models.FloorPlanTile.objects.for_object(Rack(name="Unsaved", status=self.status)).exists())
+
+    def test_status_only_tile_has_null_generic_pair(self):
+        """A tile with no object leaves the generic pair null (pairing constraint satisfied)."""
+        tile = models.FloorPlanTile(floor_plan=self.plan, x_origin=3, y_origin=1, status=self.status)
+        tile.validated_save()
+        tile.refresh_from_db()
+        self.assertIsNone(tile.placed_content_type)
+        self.assertIsNone(tile.placed_object_id)
+        self.assertEqual(tile.placed_label, "")
+
+
+class TestPlacementRegistry(TestCase):
+    """Test the placeable-type registry (Wave G1)."""
+
+    def test_builtins_are_registered(self):
+        """The four native DCIM types resolve to a PlacementType."""
+        placement = registry.resolve(Rack())
+        self.assertIsNotNone(placement)
+        self.assertEqual(placement.label, "Rack")
+
+    def test_unregistered_type_resolves_to_none(self):
+        """An unregistered model resolves to None rather than raising."""
+        self.assertIsNone(registry.resolve(Status()))
+
+    def test_duplicate_registration_is_noop(self):
+        """Re-registering an existing type without replace=True does not overwrite it."""
+        original = registry.resolve(Rack()).label
+        registry.register("dcim.rack", label="SHOULD-NOT-STICK")
+        self.assertEqual(registry.resolve(Rack()).label, original)
+
+    def test_resolve_location_uses_registered_resolver(self):
+        """The registry resolves an object's Location via its registered resolver."""
+        prerequisites = fixtures.create_prerequisites(floor_count=1)
+        floor = prerequisites["floors"][0]
+        rack = Rack.objects.create(name="RegLocRack", status=prerequisites["status"], location=floor)
+        self.assertEqual(registry.resolve_location(rack), floor)
+
+
+class TestGenericPlacementValidation(TestCase):
+    """Test model-level validation of a generic (non-typed-FK) placement (Wave G3)."""
+
+    def setUp(self):
+        """Set up two locations and a plan on the first."""
+        prerequisites = fixtures.create_prerequisites(floor_count=2)
+        self.status = prerequisites["status"]
+        self.floors = prerequisites["floors"]
+        self.plan = models.FloorPlan.objects.create(
+            location=self.floors[0],
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+
+    def _generic_tile(self, obj):
+        return models.FloorPlanTile(
+            floor_plan=self.plan,
+            status=self.status,
+            x_origin=1,
+            y_origin=1,
+            pos_x=0.5,
+            pos_y=0.5,
+            placed_content_type=ContentType.objects.get_for_model(obj),
+            placed_object_id=obj.pk,
+        )
+
+    def test_wrong_location_rejected(self):
+        """A generically-placed object in a different Location than the plan is rejected."""
+        rack = Rack.objects.create(name="ElsewhereRack", status=self.status, location=self.floors[1])
+        with self.assertRaises(ValidationError):
+            self._generic_tile(rack).validated_save()
+
+    def test_unregistered_type_rejected(self):
+        """A generically-placed object of an unregistered type is rejected."""
+        tenant = Tenant.objects.create(name="AcmeCorp")
+        with self.assertRaises(ValidationError):
+            self._generic_tile(tenant).validated_save()
+
+    def test_registered_same_location_allowed(self):
+        """A generically-placed registered object in the plan's Location validates."""
+        rack = Rack.objects.create(name="HereRack", status=self.status, location=self.floors[0])
+        tile = self._generic_tile(rack)
+        tile.validated_save()  # should not raise
+        self.assertEqual(tile.placed_object, rack)
+
+
+class TestLocationPlacement(TestCase):
+    """Test placing a Location on its parent's floor plan as a drill-down marker (campus/building/floor)."""
+
+    def setUp(self):
+        """Build the Site -> Building -> Floor tree and a plan on the Building."""
+        prerequisites = fixtures.create_prerequisites(floor_count=2)
+        self.status = prerequisites["status"]
+        self.site = prerequisites["location"]  # top of the tree (no parent)
+        self.building = prerequisites["building"]  # parent = site
+        self.floors = prerequisites["floors"]  # parent = building
+        self.building_plan = models.FloorPlan.objects.create(
+            location=self.building,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+
+    def _tile(self, plan, obj):
+        return models.FloorPlanTile(
+            floor_plan=plan,
+            status=self.status,
+            x_origin=1,
+            y_origin=1,
+            pos_x=0.5,
+            pos_y=0.5,
+            placed_content_type=ContentType.objects.get_for_model(obj),
+            placed_object_id=obj.pk,
+        )
+
+    def test_location_is_registered_with_container_and_leaf_variants(self):
+        """A Location resolves to a placeable type; containers and leaves get distinct labels/icons."""
+        self.assertEqual(registry.resolve(self.building).label, "Building")  # has floor children
+        self.assertEqual(registry.resolve(self.building).icon, "building")
+        self.assertEqual(registry.resolve(self.floors[0]).label, "Floor / Room")  # leaf
+        self.assertEqual(registry.resolve(self.floors[0]).icon, "layers")
+
+    def test_location_resolves_to_its_parent(self):
+        """A Location's 'location' for placement is its parent; a top-level location has none."""
+        self.assertEqual(registry.resolve_location(self.floors[0]), self.building)
+        self.assertEqual(registry.resolve_location(self.building), self.site)
+        self.assertIsNone(registry.resolve_location(self.site))  # no parent -> not placeable
+
+    def test_url_resolver_points_at_child_floor_plan_tab(self):
+        """The marker's link drills into the placed Location's own floor plan tab."""
+        url = registry.resolve(self.floors[0]).url_resolver(self.floors[0])
+        expected = reverse("plugins:nautobot_floor_plan:location_floor_plan_tab", kwargs={"pk": self.floors[0].pk})
+        self.assertTrue(url.startswith(expected))
+
+    def test_place_child_location_on_parent_plan(self):
+        """A Floor (child) places on its Building's plan and validates."""
+        tile = self._tile(self.building_plan, self.floors[0])
+        tile.validated_save()  # should not raise
+        self.assertEqual(tile.placed_object, self.floors[0])
+
+    def test_location_on_non_parent_plan_rejected(self):
+        """A Floor cannot be placed on a plan whose Location is not the Floor's parent."""
+        site_plan = models.FloorPlan.objects.create(
+            location=self.site,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        with self.assertRaises(ValidationError):
+            self._tile(site_plan, self.floors[0]).validated_save()  # floor's parent is building, not site
+
+    def test_top_level_location_not_placeable(self):
+        """A top-level Location (no parent) has no resolvable place and is rejected."""
+        with self.assertRaises(ValidationError):
+            self._tile(self.building_plan, self.site).validated_save()
+
+
+class TestFloorPlanObjectType(TestCase):
+    """Validation of the runtime placeable-type config model."""
+
+    def setUp(self):
+        self.ct_rack = ContentType.objects.get_for_model(Rack)
+
+    def _row(self, **kwargs):
+        defaults = {"content_type": self.ct_rack, "label": "X"}
+        defaults.update(kwargs)
+        return models.FloorPlanObjectType(**defaults)
+
+    def test_requires_single_glyph_source(self):
+        with self.assertRaises(ValidationError):
+            self._row(glyph_key="server", custom_glyph_paths=["M1 1 h2"]).validated_save()
+
+    def test_unknown_glyph_key_rejected(self):
+        with self.assertRaises(ValidationError):
+            self._row(glyph_key="not-a-real-glyph").validated_save()
+
+    def test_match_rule_requires_variant_key(self):
+        with self.assertRaises(ValidationError):
+            self._row(match_field="role.name", match_keywords=["x"]).validated_save()
+
+    def test_valid_base_row(self):
+        self._row(glyph_key="server").validated_save()  # should not raise
+
+
+class TestPlacementConfigMerge(TestCase):
+    """apply_db_config merges FloorPlanObjectType rows onto the registry's base layer."""
+
+    def setUp(self):
+        from nautobot_floor_plan.placement.config import apply_db_config
+
+        self.apply = apply_db_config
+        self.ct_rack = ContentType.objects.get_for_model(Rack)
+        self.ct_device = ContentType.objects.get_for_model(Device)
+
+    def tearDown(self):
+        # Return the process-global registry to its code/app base layer between tests.
+        models.FloorPlanObjectType.objects.all().delete()
+        self.apply()
+
+    def test_base_row_overrides_builtin(self):
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_rack, label="Custom Rack", glyph_key="cpu", color="abcdef", override=True
+        )
+        self.apply()
+        placement = registry.resolve(Rack())
+        self.assertEqual(placement.label, "Custom Rack")
+        self.assertEqual(placement.icon, "cpu")
+        self.assertEqual(placement.color, "abcdef")
+
+    def test_disabled_row_excluded(self):
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_rack, label="Nope", glyph_key="cpu", enabled=False, override=True
+        )
+        self.apply()
+        self.assertEqual(registry.resolve(Rack()).label, "Rack")  # builtin unchanged
+
+    def test_custom_glyph_row_carries_paths(self):
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_rack, label="R", custom_glyph_paths=["M9 9 h6"], override=True
+        )
+        self.apply()
+        self.assertEqual(registry.resolve(Rack()).glyph_paths_data, ["M9 9 h6"])
+
+    def test_variant_match_rule_selects_variant(self):
+        prerequisites = fixtures.create_prerequisites(floor_count=1)
+        floor, status = prerequisites["floors"][0], prerequisites["status"]
+        role = Role.objects.create(name="Infusion Pump", color="ff0000")
+        role.content_types.add(self.ct_device)
+        device = Device.objects.create(
+            name="P1", device_type=prerequisites["device_type"], role=role, status=status, location=floor
+        )
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_device, label="Device", glyph_key="cpu", override=True
+        )
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_device,
+            variant_key="pump",
+            label="Infusion Pump",
+            glyph_key="syringe",
+            match_field="role.name",
+            match_keywords=["pump"],
+            override=False,
+        )
+        self.apply()
+        placement = registry.resolve(device)
+        self.assertEqual(placement.label, "Infusion Pump")
+        self.assertEqual(placement.icon, "syringe")
+
+    def test_refresh_if_stale_reapplies_after_version_bump(self):
+        from nautobot_floor_plan.placement.config import refresh_if_stale
+
+        # Creating the row fires the post_save signal, which bumps the shared version.
+        models.FloorPlanObjectType.objects.create(
+            content_type=self.ct_rack, label="Fresh Rack", glyph_key="cpu", override=True
+        )
+        registry.applied_config_version = -999  # simulate a worker that hasn't merged this version
+        refresh_if_stale()
+        self.assertEqual(registry.resolve(Rack()).label, "Fresh Rack")
+
+    def test_location_field_drives_relational_resolution(self):
+        """A row's location_field resolves the Location through a relation (not just obj.location).
+
+        PowerFeed has no direct .location (it's at power_panel.location) — the same shape as a
+        MedicalDevice reaching its Location via device.location.
+        """
+        prerequisites = fixtures.create_prerequisites(floor_count=1)
+        floor, status = prerequisites["floors"][0], prerequisites["status"]
+        panel = PowerPanel.objects.create(name="CfgPanel", location=floor)
+        feed = PowerFeed.objects.create(name="CfgFeed", power_panel=panel, status=status)
+        models.FloorPlanObjectType.objects.create(
+            content_type=ContentType.objects.get_for_model(PowerFeed),
+            label="Feed",
+            glyph_key="plug",
+            location_field="power_panel__location",
+            override=True,
+        )
+        self.apply()
+        self.assertEqual(registry.resolve_location(feed), floor)

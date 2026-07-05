@@ -3,15 +3,22 @@
 from unittest.mock import ANY, MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from django.urls import reverse
 from nautobot.dcim.models import Device, PowerFeed, PowerPanel, Rack, RackGroup
+from nautobot.extras.models import Role
+from nautobot.tenancy.models import Tenant
 from nautobot.users.models import Token
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from nautobot_floor_plan import models, svg
-from nautobot_floor_plan.choices import ObjectOrientationChoices
+from nautobot_floor_plan.choices import ObjectOrientationChoices, PlacementModeChoices
+from nautobot_floor_plan.placement import registry
+from nautobot_floor_plan.placement.config import current_config_version
+from nautobot_floor_plan.placement.icons import ICON_GLYPHS, ICON_VIEWBOX, resolve_glyph
+from nautobot_floor_plan.placement.registry import PlacementType
 from nautobot_floor_plan.tests import fixtures
 from nautobot_floor_plan.tests.fixtures import create_prerequisites
 
@@ -303,22 +310,27 @@ class FloorPlanSVGTestCase(TestCase):
         # Setup
         mock_drawing = MagicMock()
 
-        # Mock tiles
+        # Mock tiles (render fetches them via a select_related().prefetch_related() chain).
         mock_tile1 = MagicMock()
         mock_tile2 = MagicMock()
-        self.floor_plan.tiles.all.return_value = [mock_tile1, mock_tile2]
+        self.floor_plan.tiles.select_related.return_value.prefetch_related.return_value = [mock_tile1, mock_tile2]
 
         # Mock methods called by render
+        self.svg._drawing_extents = MagicMock(return_value=(0, 0, 796, 796))
         self.svg._setup_drawing = MagicMock(return_value=mock_drawing)
+        self.svg._draw_background_image = MagicMock()
         self.svg._draw_underlay_tiles = MagicMock()
         self.svg._draw_grid = MagicMock()
         self.svg._draw_tile = MagicMock()
+        self.svg._draw_legend = MagicMock()
 
         # Call method
         result = self.svg.render()
 
         # Assertions
         self.svg._setup_drawing.assert_called_once()
+        self.svg._draw_background_image.assert_called_once_with(mock_drawing)
+        # Grid mode (mock placement_mode != freeform): every tile drawn via grid path with underlays.
         self.assertEqual(self.svg._draw_underlay_tiles.call_count, 2)
         self.svg._draw_grid.assert_called_once_with(mock_drawing)
         self.assertEqual(self.svg._draw_tile.call_count, 2)
@@ -553,3 +565,274 @@ class FloorPlanThemeTests(TestCase):
         self.assertIn(
             "filter: invert(1) hue-rotate(180deg);", response.content.decode()
         )  # Check that invert filter is being used
+
+
+class FloorPlanBlueprintSVGTests(TestCase):
+    """Wave A: blueprint background embedding and freeform tile rendering (real objects)."""
+
+    @staticmethod
+    def _image_file(name="blueprint.png", size=(200, 100)):
+        """Build an in-memory PNG upload with known pixel dimensions."""
+        from io import BytesIO  # pylint: disable=import-outside-toplevel
+
+        from django.core.files.uploadedfile import SimpleUploadedFile  # pylint: disable=import-outside-toplevel
+        from PIL import Image  # pylint: disable=import-outside-toplevel
+
+        buffer = BytesIO()
+        Image.new("RGB", size, (255, 255, 255)).save(buffer, format="PNG")
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/png")
+
+    def setUp(self):
+        """Set up prerequisites and a rendering user."""
+        data = create_prerequisites(floor_count=1)
+        self.status = data["status"]
+        self.floor = data["floors"][0]
+        self.base_url = "http://testserver"
+        self.user = User.objects.create(username="svguser", is_superuser=True)
+
+    def _render(self, floor_plan):
+        """Render a floor plan to an SVG string."""
+        return floor_plan.get_svg(user=self.user, base_url=self.base_url).tostring()
+
+    def test_no_blueprint_grid_mode_has_no_image(self):
+        """Grid plan with no blueprint renders no <image> and still publishes the content rect + grid."""
+        floor_plan = models.FloorPlan.objects.create(
+            location=self.floor, x_size=5, y_size=5, x_origin_seed=1, y_origin_seed=1
+        )
+        svg_str = self._render(floor_plan)
+        self.assertNotIn("<image", svg_str)
+        self.assertIn('data-content-w="750"', svg_str)  # 5 * GRID_SIZE_X(150)
+        self.assertIn('class="grid"', svg_str)
+
+    def test_background_image_embedded(self):
+        """A blueprint is base64-embedded with an id, opacity, and resolved normalized data-bg-* attrs."""
+        floor_plan = models.FloorPlan.objects.create(
+            location=self.floor,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            background_image=self._image_file(),
+        )
+        svg_str = self._render(floor_plan)
+        self.assertIn("<image", svg_str)
+        self.assertIn("data:image/png;base64,", svg_str)
+        self.assertIn('id="blueprint-image"', svg_str)
+        self.assertIn("data-bg-width", svg_str)
+        self.assertIn('data-bg-autofit="true"', svg_str)
+        self.assertIn("opacity=", svg_str)
+
+    def test_background_opacity_zero_skips_image(self):
+        """Zero opacity is treated as no blueprint."""
+        floor_plan = models.FloorPlan.objects.create(
+            location=self.floor,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            background_image=self._image_file(),
+            background_opacity=0,
+        )
+        self.assertNotIn("<image", self._render(floor_plan))
+
+    def test_show_grid_false_suppresses_grid(self):
+        """Hiding the grid removes the grid lines but keeps the rest of the drawing."""
+        floor_plan = models.FloorPlan.objects.create(
+            location=self.floor, x_size=5, y_size=5, x_origin_seed=1, y_origin_seed=1, show_grid=False
+        )
+        self.assertNotIn('class="grid"', self._render(floor_plan))
+
+    def test_freeform_tile_center_anchored(self):
+        """A freeform tile renders a center-anchored, transform-positioned group at the content-rect point."""
+        floor_plan = models.FloorPlan.objects.create(
+            location=self.floor,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        rack = Rack.objects.create(name="R1", status=self.status, location=self.floor)
+        tile = models.FloorPlanTile(
+            floor_plan=floor_plan,
+            status=self.status,
+            x_origin=1,
+            y_origin=1,
+            rack=rack,
+            pos_x=0.5,
+            pos_y=0.5,
+            width=0.1,
+            height=0.1,
+        )
+        tile.validated_save()
+        svg_str = self._render(floor_plan)
+        # content_w = 5 * 150 = 750; center = 26 + 0.5 * 750 = 401.
+        self.assertIn("translate(401.0,401.0)", svg_str)
+        self.assertIn("data-tile-id", svg_str)
+
+
+class FloorPlanIconRenderingTests(TestCase):
+    """Wave G2: per-type marker icons, Device-role variants, fallback, and legend."""
+
+    def setUp(self):
+        """Set up prerequisites and a freeform plan."""
+        data = create_prerequisites(floor_count=1)
+        self.status = data["status"]
+        self.device_type = data["device_type"]
+        self.device_role = data["device_role"]
+        self.floor = data["floors"][0]
+        self.user = User.objects.create(username="iconuser", is_superuser=True)
+        self.plan = models.FloorPlan.objects.create(
+            location=self.floor,
+            x_size=6,
+            y_size=6,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        self._next_cell = 1
+
+    def _place(self, **fields):
+        """Create a freeform tile placing an object at the next free grid cell."""
+        tile = models.FloorPlanTile(
+            floor_plan=self.plan,
+            status=self.status,
+            x_origin=self._next_cell,
+            y_origin=1,
+            pos_x=0.5,
+            pos_y=0.5,
+            width=0.12,
+            height=0.12,
+            **fields,
+        )
+        tile.validated_save()
+        self._next_cell += 1
+        return tile
+
+    def _render(self):
+        return self.plan.get_svg(user=self.user, base_url="http://testserver").tostring()
+
+    def test_rack_marker_renders_icon_and_chip(self):
+        """A placed rack renders an icon glyph inside a chip."""
+        self._place(rack=Rack.objects.create(name="IconRack", status=self.status, location=self.floor))
+        svg_str = self._render()
+        self.assertIn('class="marker-icon-glyph"', svg_str)
+        self.assertIn('class="marker-icon-chip"', svg_str)
+        # The rack glyph uses the "server" icon.
+        self.assertIn(ICON_GLYPHS["server"][0], svg_str)
+
+    def test_device_role_variant_icon(self):
+        """A device whose role reads as a camera renders the camera glyph; unmapped roles fall back."""
+        camera_role = Role.objects.create(name="Security Camera")
+        camera_role.content_types.add(ContentType.objects.get_for_model(Device))
+        camera = Device.objects.create(
+            name="Cam1", status=self.status, device_type=self.device_type, role=camera_role, location=self.floor
+        )
+        self._place(device=camera)
+        svg_str = self._render()
+        self.assertIn(ICON_GLYPHS["camera"][1], svg_str)  # camera lens path
+
+        # A device with the generic prerequisite role (unmapped) uses the base "cpu" glyph.
+        plain = Device.objects.create(
+            name="Dev1", status=self.status, device_type=self.device_type, role=self.device_role, location=self.floor
+        )
+        self._place(device=plain)
+        self.assertIn(ICON_GLYPHS["cpu"][0], self._render())
+
+    def test_unregistered_type_renders_fallback_without_error(self):
+        """A placed object of an unregistered type renders the help glyph and does not 500."""
+        tenant = Tenant.objects.create(name="Acme")
+        tile = models.FloorPlanTile(
+            floor_plan=self.plan,
+            status=self.status,
+            x_origin=self._next_cell,
+            y_origin=1,
+            pos_x=0.5,
+            pos_y=0.5,
+            width=0.1,
+            height=0.1,
+            placed_content_type=ContentType.objects.get_for_model(Tenant),
+            placed_object_id=tenant.pk,
+        )
+        # Insert without validation to simulate a type that was registered when placed but has since
+        # been removed (a live placement of an unregistered type is rejected by validation in G3).
+        tile.save()
+        svg_str = self._render()
+        self.assertIn(ICON_GLYPHS["help"][0], svg_str)
+
+    def test_legend_shown_for_multiple_types_and_suppressed_for_one(self):
+        """The legend appears only when two or more distinct types are present."""
+        self._place(rack=Rack.objects.create(name="LegRack", status=self.status, location=self.floor))
+        self.assertNotIn('class="legend-bg"', self._render())  # single type
+
+        panel = PowerPanel.objects.create(name="LegPanel", location=self.floor)
+        self._place(power_panel=panel)
+        self.assertIn('class="legend-bg"', self._render())  # two types
+
+
+class TestGlyphAndColorResolvers(TestCase):
+    """Runtime-configurable types: glyph-as-data + per-object glyph/color resolvers."""
+
+    def setUp(self):
+        data = create_prerequisites(floor_count=1)
+        self.status = data["status"]
+        self.floor = data["floors"][0]
+        self.user = User.objects.create(username="glyphuser", is_superuser=True)
+        self.plan = models.FloorPlan.objects.create(
+            location=self.floor, x_size=5, y_size=5, x_origin_seed=1, y_origin_seed=1,
+            placement_mode=PlacementModeChoices.FREEFORM,
+        )
+        self.svg = svg.FloorPlanSVG(floor_plan=self.plan, user=self.user, base_url="http://testserver")
+
+    def test_resolve_glyph_builtin_and_custom(self):
+        self.assertEqual(resolve_glyph("server"), (ICON_GLYPHS["server"], ICON_VIEWBOX))
+        self.assertEqual(resolve_glyph("server", custom_paths=["M1 1 h2"], viewbox=32), (["M1 1 h2"], 32))
+
+    def test_effective_glyph_static_data(self):
+        placement = PlacementType(key="x.y", label="Y", glyph_paths_data=["M2 2 h4"], glyph_viewbox=48)
+        self.assertEqual(self.svg._effective_glyph(placement, obj=object()), (["M2 2 h4"], 48))
+
+    def test_effective_glyph_per_object_resolver(self):
+        placement = PlacementType(key="x.y", label="Y", glyph_resolver=lambda o: (["M3 3 h5"], 24))
+        self.assertEqual(self.svg._effective_glyph(placement, obj=object())[0], ["M3 3 h5"])
+
+    def test_effective_glyph_resolver_failure_falls_back_to_static(self):
+        def boom(_obj):
+            raise ValueError("nope")
+
+        placement = PlacementType(key="x.y", label="Y", icon="server", glyph_resolver=boom)
+        self.assertEqual(self.svg._effective_glyph(placement, obj=object())[0], ICON_GLYPHS["server"])
+
+    def test_effective_type_color_resolver_and_fallback(self):
+        placement = PlacementType(key="x.y", label="Y", color="111111", color_resolver=lambda o: "abcdef")
+        self.assertEqual(self.svg._effective_type_color(placement, obj=object()), "abcdef")
+
+        def boom(_obj):
+            raise ValueError()
+
+        placement2 = PlacementType(key="x.y", label="Y", color="111111", color_resolver=boom)
+        self.assertEqual(self.svg._effective_type_color(placement2, obj=object()), "111111")
+
+    def test_custom_glyph_renders_in_svg_output(self):
+        """A type registered with glyph-as-data renders its custom path in the SVG (marker + legend)."""
+        marker = "M1 2 h9 v9 h-9 z"  # distinctive, collision-unlikely path
+        registry.register(
+            "dcim.rack", label="Rack", icon="server", color="6c757d",
+            legend_order=10, glyph_paths_data=[marker], replace=True,
+        )
+        # render() calls refresh_if_stale(); if a prior test bumped the DB-config version this would
+        # restore_base() and wipe the manual registration above. Align the applied version so the
+        # lazy refresh is a no-op and we render exactly the glyph-as-data we just registered.
+        registry.applied_config_version = current_config_version()
+        try:
+            rack = Rack.objects.create(name="GlyphRack", status=self.status, location=self.floor)
+            models.FloorPlanTile(
+                floor_plan=self.plan, status=self.status, rack=rack, x_origin=1, y_origin=1, pos_x=0.5, pos_y=0.5,
+            ).validated_save()
+            svg_str = self.plan.get_svg(user=self.user, base_url="http://testserver").tostring()
+            self.assertIn(marker, svg_str)
+        finally:
+            # Restore the builtin so other tests see the stock registration.
+            registry.register(
+                "dcim.rack", label="Rack", icon="server", color="6c757d", legend_order=10, replace=True,
+            )

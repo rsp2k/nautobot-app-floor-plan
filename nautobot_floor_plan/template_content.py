@@ -6,6 +6,15 @@ from nautobot.apps.ui import Button, DistinctViewTab, TemplateExtension
 from nautobot.core.views.utils import get_obj_from_context
 
 
+def _tile_for(obj):
+    """Return the floor plan tile placing an object (generic reverse lookup), or None."""
+    if obj is None:
+        return None
+    from nautobot_floor_plan.models import FloorPlanTile  # pylint: disable=import-outside-toplevel
+
+    return FloorPlanTile.objects.for_object(obj).first()
+
+
 class DeleteFloorPlanButton(Button):  # pylint: disable=abstract-method
     """Button for deleting a floor plan."""
 
@@ -210,7 +219,7 @@ class BaseFloorPlanButton(Button):  # pylint: disable=abstract-method
         return (
             user.has_perm("nautobot_floor_plan.view_floorplan")
             and self.get_floor_plan_pk(obj)
-            and getattr(obj, "floor_plan_tile", None)
+            and _tile_for(obj) is not None
         )
 
 
@@ -257,7 +266,7 @@ class DeviceFloorPlanButton(BaseFloorPlanButton):  # pylint: disable=abstract-me
         device = context["object"]
         floor_plan_pk = self.get_floor_plan_pk(device)
         # Check if the device has its own floor plan tile
-        if floor_plan_pk and getattr(device, "floor_plan_tile", None):
+        if floor_plan_pk and _tile_for(device) is not None:
             return f"{reverse('plugins:nautobot_floor_plan:floorplan', kwargs={'pk': floor_plan_pk})}?highlight_device={device.pk}"
 
         # If not, check if the device is mounted in a rack with a floor plan
@@ -284,8 +293,8 @@ class DeviceFloorPlanButton(BaseFloorPlanButton):  # pylint: disable=abstract-me
         user = context["request"].user
         # Check permissions, if the device itself has a floor plan tile or if the device is mounted in a rack with a floor plan
         return user.has_perm("nautobot_floor_plan.view_floorplan") and (
-            getattr(device, "floor_plan_tile", None)
-            or (getattr(device, "rack", None) and getattr(device.rack, "floor_plan_tile", None))
+            _tile_for(device) is not None
+            or (getattr(device, "rack", None) and _tile_for(device.rack) is not None)
         )
 
 

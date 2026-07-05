@@ -167,3 +167,123 @@ rect.object-orientation {
     pointer-events: none;
     filter: invert(1) hue-rotate(180deg);
 }
+
+/* Blueprint background: sits behind the grid and never intercepts clicks in view mode. */
+.background-image {
+    pointer-events: none;
+}
+
+/* Interaction-mode cursor affordances (consumed by the drag layer). */
+svg[data-ui-mode="place"] g.object {
+    cursor: grab;
+}
+
+svg[data-ui-mode="place"] g.object.dragging {
+    cursor: grabbing;
+}
+
+svg[data-ui-mode="calibrate"] #blueprint-image {
+    pointer-events: auto;
+    cursor: move;
+}
+
+/* Per-type marker icons and legend (dark). */
+.marker-icon-chip {
+    fill: rgba(26, 30, 36, 0.85);
+    stroke: none;
+}
+
+.marker-icon-glyph {
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.legend-bg {
+    fill: rgba(26, 30, 36, 0.92);
+    stroke: #555;
+    stroke-width: 1;
+}
+
+.legend-label {
+    text-anchor: start;
+    dominant-baseline: middle;
+    font-size: 12px;
+    fill: #e6e6e6;
+}
+
+/* Halo so marker names stay legible over a busy blueprint (dark). */
+.label-text-primary {
+    paint-order: stroke;
+    stroke: #1a1e24;
+    stroke-width: 2.5px;
+    stroke-linejoin: round;
+}
+/* ── Wave D: calibrate overlay + focus ring + touch/reduced-motion (dark) ── */
+svg[data-ui-mode="place"],
+svg[data-ui-mode="calibrate"] {
+    touch-action: none;
+}
+
+.calibrate-overlay {
+    pointer-events: none;
+}
+.calibrate-body {
+    pointer-events: fill;
+    fill: rgba(77, 171, 247, 0.08);
+    stroke: #4dabf7;
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    cursor: move;
+}
+.calibrate-handle {
+    pointer-events: all;
+    fill: #1a1e24;
+    stroke: #4dabf7;
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    cursor: pointer;
+}
+.calibrate-handle[data-corner="nw"],
+.calibrate-handle[data-corner="se"] {
+    cursor: nwse-resize;
+}
+.calibrate-handle[data-corner="ne"],
+.calibrate-handle[data-corner="sw"] {
+    cursor: nesw-resize;
+}
+.calibrate-rotate {
+    fill: #4dabf7;
+    stroke: #1a1e24;
+    cursor: grab;
+}
+.calibrate-rot-arm {
+    stroke: #4dabf7;
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
+}
+.calibrate-handle:focus-visible {
+    outline: 2px solid #4dabf7;
+    outline-offset: 2px;
+}
+
+.object .focus-ring {
+    display: none;
+    fill: none;
+    stroke: #4dabf7;
+    stroke-width: 2px;
+    vector-effect: non-scaling-stroke;
+}
+.object.is-focused .focus-ring {
+    display: inline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spotlight-effect,
+    .highlight-border,
+    .indicator-arrow {
+        animation: none !important;
+    }
+}

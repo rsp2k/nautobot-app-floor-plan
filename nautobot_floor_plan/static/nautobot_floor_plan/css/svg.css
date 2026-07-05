@@ -160,3 +160,126 @@ rect.object-orientation {
 .indicator-arrow {
     pointer-events: none;
 }
+
+/* Blueprint background: sits behind the grid and never intercepts clicks in view mode. */
+.background-image {
+    pointer-events: none;
+}
+
+/* Interaction-mode cursor affordances (consumed by the drag layer). */
+svg[data-ui-mode="place"] g.object {
+    cursor: grab;
+}
+
+svg[data-ui-mode="place"] g.object.dragging {
+    cursor: grabbing;
+}
+
+svg[data-ui-mode="calibrate"] #blueprint-image {
+    pointer-events: auto;
+    cursor: move;
+}
+
+/* Per-type marker icons and legend. */
+.marker-icon-chip {
+    fill: rgba(255, 255, 255, 0.85);
+    stroke: none;
+}
+
+.marker-icon-glyph {
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.legend-bg {
+    fill: rgba(255, 255, 255, 0.92);
+    stroke: #cfd6dd;
+    stroke-width: 1;
+}
+
+.legend-label {
+    text-anchor: start;
+    dominant-baseline: middle;
+    font-size: 12px;
+    fill: #26303b;
+}
+
+/* Halo so marker names stay legible over a busy blueprint. */
+.label-text-primary {
+    paint-order: stroke;
+    stroke: #ffffff;
+    stroke-width: 2.5px;
+    stroke-linejoin: round;
+}
+/* ── Wave D: calibrate overlay + focus ring + touch/reduced-motion ── */
+/* touch-action on the ROOT svg (honored there, unlike inner elements) so a touch-drag in an edit
+   mode isn't claimed by the browser for scroll before setPointerCapture engages. */
+svg[data-ui-mode="place"],
+svg[data-ui-mode="calibrate"] {
+    touch-action: none;
+}
+
+.calibrate-overlay {
+    pointer-events: none;
+}
+.calibrate-body {
+    pointer-events: fill;
+    fill: rgba(28, 126, 214, 0.06);
+    stroke: #1c7ed6;
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    cursor: move;
+}
+.calibrate-handle {
+    pointer-events: all;
+    fill: #ffffff;
+    stroke: #1c7ed6;
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    cursor: pointer;
+}
+.calibrate-handle[data-corner="nw"],
+.calibrate-handle[data-corner="se"] {
+    cursor: nwse-resize;
+}
+.calibrate-handle[data-corner="ne"],
+.calibrate-handle[data-corner="sw"] {
+    cursor: nesw-resize;
+}
+.calibrate-rotate {
+    fill: #1c7ed6;
+    stroke: #ffffff;
+    cursor: grab;
+}
+.calibrate-rot-arm {
+    stroke: #1c7ed6;
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
+}
+.calibrate-handle:focus-visible {
+    outline: 2px solid #1c7ed6;
+    outline-offset: 2px;
+}
+
+/* Server-drawn per-marker focus ring, toggled by JS on focus. */
+.object .focus-ring {
+    display: none;
+    fill: none;
+    stroke: #1c7ed6;
+    stroke-width: 2px;
+    vector-effect: non-scaling-stroke;
+}
+.object.is-focused .focus-ring {
+    display: inline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spotlight-effect,
+    .highlight-border,
+    .indicator-arrow {
+        animation: none !important;
+    }
+}

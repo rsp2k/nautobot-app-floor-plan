@@ -42,6 +42,7 @@ class FloorPlanTileFilterSet(NautobotFilterSet):
             "floor_plan__location__name": "icontains",
             "rack__name": "icontains",
             "rack_group__name": "icontains",
+            "placed_label": "icontains",
         },
     )
     floor_plan = django_filters.ModelMultipleChoiceFilter(queryset=models.FloorPlan.objects.all())
@@ -81,4 +82,35 @@ class FloorPlanTileFilterSet(NautobotFilterSet):
         """Meta attributes."""
 
         model = models.FloorPlanTile
-        fields = ["x_origin", "y_origin", "tags"]  # pylint: disable=nb-use-fields-all
+        # placed_content_type / placed_object_id let a tile be filtered by any placed object type.
+        fields = [  # pylint: disable=nb-use-fields-all
+            "x_origin",
+            "y_origin",
+            "placed_content_type",
+            "placed_object_id",
+            "tags",
+        ]
+
+
+class FloorPlanObjectTypeFilterSet(NautobotFilterSet):
+    """Filter for FloorPlanObjectType."""
+
+    q = SearchFilter(
+        filter_predicates={
+            "label": "icontains",
+            "variant_key": "icontains",
+        },
+    )
+
+    class Meta:
+        """Meta attributes."""
+
+        model = models.FloorPlanObjectType
+        fields = [  # pylint: disable=nb-use-fields-all
+            "content_type",
+            "variant_key",
+            "label",
+            "override",
+            "enabled",
+            "tags",
+        ]

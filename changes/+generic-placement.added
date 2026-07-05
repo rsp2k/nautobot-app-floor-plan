@@ -1,0 +1,1 @@
+Added a generic placement target (`placed_content_type` + `placed_object_id`) to floor plan tiles so any object type can be placed, not just racks and power equipment. Existing typed relationships are backfilled into it and preserved.

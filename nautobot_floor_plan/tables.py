@@ -19,6 +19,7 @@ class FloorPlanTable(BaseTable):
     pk = ToggleColumn()
     floor_plan = tables.Column(empty_values=[], orderable=False)
     location = tables.Column(linkify=True)
+    placement_mode = tables.Column(verbose_name="Mode")
     x_origin_seed = tables.Column(verbose_name="X Origin Seed")
     y_origin_seed = tables.Column(verbose_name="Y Origin Seed")
     tags = TagColumn()
@@ -27,6 +28,10 @@ class FloorPlanTable(BaseTable):
     def render_floor_plan(self, record):
         """Render a link to the detail view for the FloorPlan record itself."""
         return hyperlinked_object(record)
+
+    def render_placement_mode(self, record):
+        """Render the human-readable placement mode (Grid / Freeform)."""
+        return record.get_placement_mode_display()
 
     def render_x_origin_seed(self, record):
         """Render x_origin seed or converted custom start label if defined."""
@@ -53,6 +58,7 @@ class FloorPlanTable(BaseTable):
             "pk",
             "floor_plan",
             "location",
+            "placement_mode",
             "x_size",
             "y_size",
             "x_origin_seed",
@@ -64,18 +70,13 @@ class FloorPlanTable(BaseTable):
             "tags",
             "actions",
         )
+        # Grid-geometry columns (sizes, seeds, steps, tile dims) are available but off by
+        # default; they're meaningless for freeform/blueprint plans and cluttered the list.
         default_columns = (
             "pk",
             "floor_plan",
             "location",
-            "x_size",
-            "y_size",
-            "x_origin_seed",
-            "x_axis_step",
-            "y_origin_seed",
-            "y_axis_step",
-            "tile_width",
-            "tile_depth",
+            "placement_mode",
             "tags",
             "actions",
         )
@@ -150,5 +151,43 @@ class FloorPlanTileTable(BaseTable):
             "allocation_type",
             "allocated_object",
             "tags",
+            "actions",
+        )
+
+
+class FloorPlanObjectTypeTable(BaseTable):
+    # pylint: disable=too-few-public-methods
+    """Table for the FloorPlanObjectType list view."""
+
+    pk = ToggleColumn()
+    label = tables.Column(linkify=True)
+    content_type = tables.Column(verbose_name="Object Type")
+    actions = ButtonsColumn(models.FloorPlanObjectType)
+
+    class Meta(BaseTable.Meta):
+        """Meta attributes."""
+
+        model = models.FloorPlanObjectType
+        fields = (
+            "pk",
+            "label",
+            "content_type",
+            "variant_key",
+            "glyph_key",
+            "color",
+            "legend_order",
+            "override",
+            "enabled",
+            "tags",
+            "actions",
+        )
+        default_columns = (
+            "pk",
+            "label",
+            "content_type",
+            "variant_key",
+            "glyph_key",
+            "override",
+            "enabled",
             "actions",
         )

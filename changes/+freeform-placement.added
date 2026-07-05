@@ -1,0 +1,1 @@
+Added freeform object placement using normalized, rotatable coordinates alongside the existing grid, and a REST `convert-to-freeform` action that seeds positions from an existing grid layout.

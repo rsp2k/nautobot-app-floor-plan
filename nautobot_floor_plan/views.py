@@ -249,3 +249,16 @@ class FloorPlanTileUIViewSet(
                 )
             )
         )
+
+
+class FloorPlanObjectTypeUIViewSet(NautobotUIViewSet):
+    """ViewSet for the runtime placeable-type config (FloorPlanObjectType)."""
+
+    bulk_update_form_class = forms.FloorPlanObjectTypeBulkEditForm
+    filterset_class = filters.FloorPlanObjectTypeFilterSet
+    filterset_form_class = forms.FloorPlanObjectTypeFilterForm
+    form_class = forms.FloorPlanObjectTypeForm
+    lookup_field = "pk"
+    queryset = models.FloorPlanObjectType.objects.all()
+    serializer_class = serializers.FloorPlanObjectTypeSerializer
+    table_class = tables.FloorPlanObjectTypeTable

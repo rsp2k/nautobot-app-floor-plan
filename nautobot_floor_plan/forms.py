@@ -87,7 +87,24 @@ class FloorPlanForm(NautobotModelForm):
         """Meta attributes."""
 
         model = models.FloorPlan
-        fields = "__all__"
+        # Explicit list (not "__all__") so additive model fields such as the freeform/blueprint
+        # settings don't silently become required form inputs. User-facing blueprint controls are
+        # wired into the form in a later phase; calibration fields (bg_*) are set programmatically.
+        fields = [
+            "location",
+            "x_size",
+            "y_size",
+            "tile_width",
+            "tile_depth",
+            "x_axis_labels",
+            "y_axis_labels",
+            "x_origin_seed",
+            "y_origin_seed",
+            "x_axis_step",
+            "y_axis_step",
+            "is_tile_movable",
+            "tags",
+        ]
 
     @property
     def x_ranges(self):
@@ -504,7 +521,17 @@ class FloorPlanTileForm(NautobotModelForm):
 
         model = models.FloorPlanTile
         fields = "__all__"
-        exclude = ["allocation_type", "on_group_tile"]  # pylint: disable=modelform-uses-exclude
+        # Freeform placement fields (pos_x/pos_y/width/height/rotation) are set by drag placement,
+        # not this grid-oriented form, so keep them out of it.
+        exclude = [  # pylint: disable=modelform-uses-exclude
+            "allocation_type",
+            "on_group_tile",
+            "pos_x",
+            "pos_y",
+            "width",
+            "height",
+            "rotation",
+        ]
 
     fieldsets = (
         (
@@ -713,3 +740,57 @@ CustomLabelRangeFormSetNoExtra = formset_factory(
     can_delete=True,
     validate_min=False,
 )
+
+
+class FloorPlanObjectTypeForm(NautobotModelForm):
+    """Create/edit form for a runtime placeable-type config."""
+
+    class Meta:
+        """Meta attributes."""
+
+        model = models.FloorPlanObjectType
+        fields = [
+            "content_type",
+            "variant_key",
+            "label",
+            "color",
+            "glyph_key",
+            "custom_glyph_paths",
+            "glyph_viewbox",
+            "legend_order",
+            "location_field",
+            "match_field",
+            "match_keywords",
+            "match_precedence",
+            "override",
+            "enabled",
+            "tags",
+        ]
+
+
+class FloorPlanObjectTypeFilterForm(NautobotFilterForm):  # pylint: disable=too-many-ancestors
+    """Filter form for FloorPlanObjectType."""
+
+    model = models.FloorPlanObjectType
+    field_order = ["q", "content_type", "enabled", "override"]
+
+    q = forms.CharField(required=False, label="Search")
+    enabled = forms.NullBooleanField(required=False)
+    override = forms.NullBooleanField(required=False)
+    tag = TagFilterField(model)
+
+
+class FloorPlanObjectTypeBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):  # pylint: disable=too-many-ancestors
+    """Bulk edit form for FloorPlanObjectType."""
+
+    pk = forms.ModelMultipleChoiceField(
+        queryset=models.FloorPlanObjectType.objects.all(), widget=forms.MultipleHiddenInput
+    )
+    color = forms.CharField(max_length=6, required=False)
+    legend_order = forms.IntegerField(required=False)
+    enabled = forms.NullBooleanField(required=False)
+
+    class Meta:
+        """Meta attributes."""
+
+        fields = ["pk", "color", "legend_order", "enabled", "tags"]

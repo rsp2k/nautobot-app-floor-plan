@@ -8,6 +8,7 @@ router = OrderedDefaultRouter()
 # add the name of your api endpoint, usually hyphenated model name in plural, e.g. "my-model-classes"
 router.register("floor-plans", views.FloorPlanViewSet)
 router.register("floor-plan-tiles", views.FloorPlanTileViewSet)
+router.register("object-types", views.FloorPlanObjectTypeViewSet)
 
 app_name = "nautobot_floor_plan-api"
 urlpatterns = router.urls
