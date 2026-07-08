@@ -49,6 +49,13 @@
             {% endif %}
         </div>
 
+        {% if can_calibrate %}
+        {% comment %} Standalone (not a drag-layer mode): opens a modal to import a blueprint from a PDF. {% endcomment %}
+        <button type="button" class="btn btn-sm btn-info" id="import-pdf-button" style="margin-left: 12px;" hidden>
+            <span aria-hidden="true" class="mdi mdi-file-pdf-box"></span> Import from PDF
+        </button>
+        {% endif %}
+
         {% if can_calibrate and object.background_image %}
         <span class="floor-plan-opacity-control" style="margin-left: 12px; white-space: nowrap;">
             <label for="blueprint-opacity-range" style="margin: 0 4px 0 0;">Blueprint opacity</label>
@@ -94,6 +101,56 @@
         </div>
     </div>
     {% endif %}
+
+    {% if can_calibrate %}
+    {% comment %} Import-from-PDF modal. JS (floorplan-import.js) drives the steps and builds the crop box. {% endcomment %}
+    <div id="blueprint-import-modal" class="blueprint-import-modal d-print-none" hidden role="dialog"
+         aria-modal="true" aria-labelledby="blueprint-import-title">
+        <div class="blueprint-import-dialog">
+            <div class="blueprint-import-head">
+                <strong id="blueprint-import-title">Import blueprint from PDF</strong>
+                <button type="button" class="btn btn-sm btn-default" id="blueprint-import-close" aria-label="Close">
+                    <span aria-hidden="true" class="mdi mdi-close"></span>
+                </button>
+            </div>
+            <div class="blueprint-import-body">
+                <div id="blueprint-import-upload">
+                    <input type="file" id="blueprint-import-file" accept="application/pdf,.pdf" aria-label="PDF file">
+                    <button type="button" class="btn btn-sm btn-primary" id="blueprint-import-upload-btn">
+                        <span aria-hidden="true" class="mdi mdi-upload"></span> Upload &amp; render
+                    </button>
+                    <span class="text-muted" id="blueprint-import-status" role="status" aria-live="polite"></span>
+                </div>
+                <div id="blueprint-import-pages" class="blueprint-import-pages" hidden
+                     aria-label="Rendered pages"></div>
+                <div id="blueprint-import-crop" class="blueprint-import-crop" hidden>
+                    <div class="blueprint-import-crop-tools">
+                        <button type="button" class="btn btn-sm btn-default" id="blueprint-crop-back">
+                            <span aria-hidden="true" class="mdi mdi-arrow-left"></span> Pages
+                        </button>
+                        <button type="button" class="btn btn-sm btn-default" id="blueprint-crop-rotate-l">
+                            <span aria-hidden="true" class="mdi mdi-rotate-left"></span></button>
+                        <button type="button" class="btn btn-sm btn-default" id="blueprint-crop-rotate-r">
+                            <span aria-hidden="true" class="mdi mdi-rotate-right"></span></button>
+                        <button type="button" class="btn btn-sm btn-success" id="blueprint-crop-commit">
+                            <span aria-hidden="true" class="mdi mdi-check"></span> Set as background
+                        </button>
+                        <span class="text-muted" style="font-size: 12px;">Drag the box edges to crop the drawing.</span>
+                    </div>
+                    <div class="blueprint-import-stage" id="blueprint-crop-stage">
+                        <img id="blueprint-crop-image" alt="Selected page" draggable="false">
+                        <div id="blueprint-crop-box" class="blueprint-crop-box" hidden>
+                            <span class="blueprint-crop-handle" data-corner="nw"></span>
+                            <span class="blueprint-crop-handle" data-corner="ne"></span>
+                            <span class="blueprint-crop-handle" data-corner="se"></span>
+                            <span class="blueprint-crop-handle" data-corner="sw"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
     {% endif %}
 
     <div class="text-center">
@@ -120,6 +177,7 @@
     <script src="{% static 'nautobot_floor_plan/gsap.js-3.12.2/gsap.min.js' %}"></script>
     <script src="{% static 'nautobot_floor_plan/js/floorplan-coords.js' %}?v={% now 'U' %}"></script>
     <script src="{% static 'nautobot_floor_plan/js/floorplan_editing.js' %}?v={% now 'U' %}"></script>
+    <script src="{% static 'nautobot_floor_plan/js/floorplan-import.js' %}?v={% now 'U' %}"></script>
     <script>
         const ZOOM_DURATION = {{ zoom_duration }};
         const HIGHLIGHT_DURATION = {{ highlight_duration }};
@@ -143,7 +201,11 @@
              data-tile-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplantile-list' %}"
              data-floorplan-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-detail' pk=object.pk %}"
              {% if can_place %}data-place-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplantile-place' %}" data-placeable-types-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-placeable-types' pk=object.pk %}"{% endif %}
-             {% if can_calibrate %}data-convert-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-convert-to-freeform' pk=object.pk %}"{% endif %}
+             {% if can_calibrate %}data-convert-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-convert-to-freeform' pk=object.pk %}"
+             data-import-pdf-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-import-pdf' pk=object.pk %}"
+             data-pages-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-pages' pk=object.pk %}"
+             data-extract-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-extract' pk=object.pk %}"
+             data-jobresult-api="{% url 'extras-api:jobresult-list' %}"{% endif %}
              id="floor-plan-svg" style="position: absolute; height: 100%; width: 100%; left: 0; top: 0;"></div>
     </div>
 {% endwith %}

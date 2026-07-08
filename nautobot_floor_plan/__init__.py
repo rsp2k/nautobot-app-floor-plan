@@ -10,6 +10,7 @@ from nautobot.apps.config import get_app_settings_or_config
 
 from nautobot_floor_plan.choices import AxisLabelsChoices
 
+
 def _resolve_version():
     """Version from whichever distribution provides this import package.
 
@@ -20,7 +21,7 @@ def _resolve_version():
     try:
         for dist in metadata.packages_distributions().get(__name__, []):
             return metadata.version(dist)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110  best-effort: fall through to the known-name lookup below
         pass
     for candidate in ("nautobot-floor-plan-freeform", "nautobot-floor-plan"):
         try:

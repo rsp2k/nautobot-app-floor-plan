@@ -156,6 +156,15 @@ class FloorPlan(PrimaryModel):
     bg_width = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint width in SVG units.")
     bg_height = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint height in SVG units.")
     bg_rotation = models.FloatField(default=0, help_text="Calibration: blueprint rotation in degrees.")
+    # Source document (e.g. an architectural PDF) the blueprint is imported from. Kept so a user can
+    # re-pick a page / re-crop later without re-uploading. The RenderBlueprintPages job rasterizes it
+    # into BlueprintPage rows; the picked crop lands in background_image.
+    source_document = models.FileField(
+        upload_to="floor_plan_sources/",
+        blank=True,
+        null=True,
+        help_text="Optional source document (e.g. a PDF) that blueprint pages are rendered from.",
+    )
 
     class Meta:
         """Metaclass attributes."""
@@ -943,3 +952,48 @@ class FloorPlanObjectType(PrimaryModel):
             raise ValidationError("match_field and match_keywords must be set together.")
         if (self.match_field or self.match_keywords) and not self.variant_key:
             raise ValidationError("A match rule (match_field/match_keywords) requires a variant_key.")
+
+
+class BlueprintPage(PrimaryModel):
+    """A single page of a FloorPlan's ``source_document``, rasterized by the RenderBlueprintPages job.
+
+    These are derived artifacts: the job clears and re-creates them from the source document, and the
+    picker lists them so a user can choose a page and crop it into ``background_image``. Rendering the
+    page (not extracting embedded images) is deliberate -- print-to-PDF sets embed the firm logo, not
+    the drawing.
+    """
+
+    floor_plan = models.ForeignKey(
+        to="nautobot_floor_plan.FloorPlan",
+        on_delete=models.CASCADE,
+        related_name="blueprint_pages",
+    )
+    page_number = models.PositiveIntegerField(help_text="1-based page number in the source document.")
+    image = models.ImageField(
+        upload_to="floor_plan_pages/",
+        width_field="image_width",
+        height_field="image_height",
+        help_text="Full-resolution raster of the rendered page.",
+    )
+    image_width = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    image_height = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    thumbnail = models.ImageField(
+        upload_to="floor_plan_page_thumbs/",
+        blank=True,
+        help_text="Downscaled preview for the page picker grid.",
+    )
+
+    class Meta:
+        """Meta attributes."""
+
+        ordering = ["floor_plan", "page_number"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["floor_plan", "page_number"],
+                name="blueprintpage_unique_plan_page",
+            ),
+        ]
+
+    def __str__(self):
+        """Stringify instance."""
+        return f"{self.floor_plan} page {self.page_number}"

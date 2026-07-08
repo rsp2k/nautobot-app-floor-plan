@@ -39,6 +39,11 @@ exclude = [
 python = ">=3.10,<3.15"
 # Used for local development
 nautobot = ">=3.0.0,<4.0.0"
+# Blueprint PDF import: render pages to images server-side. pypdfium2 wraps Google's PDFium
+# (BSD-3-Clause / Apache-2.0) with no system deps -- chosen over PyMuPDF, which is AGPL-3.0 and
+# would impose copyleft obligations on this Apache-2.0 app. Pillow does the crop/thumbnail.
+pypdfium2 = ">=5.0,<6.0"
+Pillow = ">=10.0"
 
 [tool.poetry.group.dev.dependencies]
 coverage = "*"

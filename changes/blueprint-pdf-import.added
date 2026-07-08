@@ -1,0 +1,1 @@
+Added blueprint import: upload a PDF to a Floor Plan and a background Nautobot Job renders each page, then pick a page and crop it into the plan background image.

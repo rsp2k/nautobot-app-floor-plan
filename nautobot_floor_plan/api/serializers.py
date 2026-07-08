@@ -212,3 +212,61 @@ class FloorPlanObjectTypeSerializer(NautobotModelSerializer, TaggedModelSerializ
 
         model = models.FloorPlanObjectType
         fields = "__all__"
+
+
+class BlueprintPageSerializer(serializers.Serializer):  # pylint: disable=abstract-method
+    """Read-only page info for the blueprint page picker (thumbnail grid + full-image URL)."""
+
+    id = serializers.UUIDField(read_only=True)
+    page_number = serializers.IntegerField()
+    image_width = serializers.IntegerField(allow_null=True)
+    image_height = serializers.IntegerField(allow_null=True)
+    thumbnail_url = serializers.SerializerMethodField()
+    image_url = serializers.SerializerMethodField()
+
+    def _absolute(self, file_field):
+        if not file_field:
+            return None
+        request = self.context.get("request")
+        return request.build_absolute_uri(file_field.url) if request else file_field.url
+
+    def get_thumbnail_url(self, obj):
+        """Absolute URL of the page thumbnail (falls back to the full image)."""
+        return self._absolute(obj.thumbnail or obj.image)
+
+    def get_image_url(self, obj):
+        """Absolute URL of the full-resolution page image."""
+        return self._absolute(obj.image)
+
+
+class BlueprintExtractSerializer(serializers.Serializer):  # pylint: disable=abstract-method
+    """Input for the extract action: which page, the normalized crop box, and an orientation."""
+
+    page_number = serializers.IntegerField(min_value=1)
+    # [x, y, w, h] normalized 0..1, relative to the (already rotated) page image.
+    crop_box = serializers.ListField(
+        child=serializers.FloatField(validators=[validate_finite]),
+        min_length=4,
+        max_length=4,
+    )
+    rotation = serializers.FloatField(required=False, default=0, validators=[validate_finite])
+
+    def validate_crop_box(self, value):
+        """Require positive width/height; clamp offsets/size into the unit square."""
+        x, y, w, h = value
+        if w <= 0 or h <= 0:
+            raise serializers.ValidationError("crop_box width and height must be positive.")
+        x = min(max(x, 0.0), 1.0)
+        y = min(max(y, 0.0), 1.0)
+        w = min(w, 1.0 - x)
+        h = min(h, 1.0 - y)
+        if w <= 0 or h <= 0:
+            raise serializers.ValidationError("crop_box lies outside the page.")
+        return [x, y, w, h]
+
+
+class BlueprintImportResultSerializer(serializers.Serializer):  # pylint: disable=abstract-method
+    """Result of kicking off a PDF import: the JobResult to poll for render progress."""
+
+    job_result = serializers.UUIDField()
+    page_count_hint = serializers.IntegerField(required=False)
