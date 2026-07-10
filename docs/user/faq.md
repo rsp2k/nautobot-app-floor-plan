@@ -8,6 +8,14 @@ Grid mode snaps every object to a cell in the X/Y grid, which is ideal for a str
 
 No. The blueprint background is optional. Freeform placement works over a plain grid just as well, and grid mode does not use a background at all. A background image is most useful when you have an actual floor plan, CAD export, or architectural drawing to align markers against.
 
+## How do I turn a PDF floor plan into a background?
+
+Open the Floor Plan and click **Import from PDF**, choose your PDF, and press **Upload & render**. Each page is rendered to an image by a background job; pick the page you want from the thumbnail grid, drag the crop box around just the drawing, rotate it if needed, and click **Set as background**. The uploaded PDF stays with the plan, so you can re-pick or re-crop later without uploading again. Only PDF is supported today; CAD (`.dxf`) is planned.
+
+## The imported page came in upside down or sideways. Can I fix it?
+
+Yes. In the crop step, use the rotate buttons to turn the page (in 90° steps) before you set it as the background — architectural sheets often render rotated. The rotation is applied to the cropped result.
+
 ## Which object types can I place on a Floor Plan?
 
 Out of the box: Devices, Power Panels, Power Feeds, Racks, and Locations. Beyond those, other Nautobot apps can register their own object types as placeable, and you can define or override placeable types yourself from the **Floor Plan Object Types** page in the UI. Any object that resolves to the plan's Location is eligible.

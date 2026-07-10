@@ -27,7 +27,14 @@ This release adds blueprint-backed freeform placement and a runtime-configurable
 - Added the **Floor Plan Object Type** model with full CRUD UI and REST API. Admins can define placeable types, choose a built-in glyph or supply custom SVG paths, set a color and legend order, and override the built-in types, all without a code change.
 - Configuration merges into the placement registry and refreshes across workers via a cache-version check, so runtime edits take effect without a restart.
 
+### Import a blueprint from a PDF
+
+- Added **Import from PDF** on the Floor Plan: upload an architectural PDF, and a background **Nautobot Job** (`Render Blueprint PDF Pages`) rasterizes each page to an image. Pick a page from a thumbnail grid, crop the drawing region, rotate it if needed, and it becomes the plan's background image.
+- Added `FloorPlan.source_document` and a `BlueprintPage` model (rendered pages persist, so a page can be re-picked or re-cropped without re-uploading), plus `import-pdf` / `pages` / `extract` REST API actions.
+- Rendering uses **pypdfium2** (BSD-3-Clause / Apache-2.0) under caps on page count, file size, and resolution, and runs on the platform's job queue via the built-in Nautobot Job (no direct queue dependency in the app).
+
 ## Housekeeping
 
 - Published to PyPI as `nautobot-floor-plan-freeform` under CalVer.
-- Added design notes under the Developer Guide covering the freeform/blueprint model, generalized object placement, hierarchical Location placement, and a roadmap for PDF/CAD blueprint import.
+- Added `pypdfium2` and `Pillow` as dependencies for the PDF import pipeline.
+- Added design notes under the Developer Guide covering the freeform/blueprint model, generalized object placement, hierarchical Location placement, and the (now shipped) PDF blueprint import.

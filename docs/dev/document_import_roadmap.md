@@ -1,66 +1,69 @@
-# Roadmap: import blueprints from PDF / CAD (crop-to-background)
+# Import blueprints from PDF / CAD (crop-to-background)
 
-Status: **planned** (captured 2026-07-03). Today a background blueprint is a raster
-image uploaded directly. This adds a source-document pipeline: upload a PDF (or CAD
-file), have the server rasterize it, let the user pick a page and **crop** the region
-they want, and set that crop as the plan's `background_image`. The existing
+Status: **v1 implemented** (PDF import shipped 2026-07); DXF and the pluggable importer
+registry remain planned. This page documents the shipped design and what is still ahead.
+
+A background blueprint can be uploaded directly as a raster image, or **imported from a PDF**:
+upload a PDF to a Floor Plan, a background Nautobot Job rasterizes each page, and the user
+picks a page and **crops** the region they want as the plan's `background_image`. The existing
 calibration (`bg_x/bg_y/bg_width/bg_height`) and freeform placement then work unchanged.
 
 ## Why
 
-Real floor plans arrive as multi-page PDFs (architectural sets) or CAD files (`.dxf`),
-not pre-cropped PNGs. Making the app ingest those directly removes a manual
-export/crop step in an external tool and keeps the source of truth attached to the plan.
+Real floor plans arrive as multi-page PDF sets (architectural drawings), not pre-cropped PNGs.
+Ingesting them directly removes a manual export/crop step in an external tool and keeps the
+source document attached to the plan for re-picking or re-cropping later.
 
-## Shape of the feature
+## What shipped (v1, PDF)
 
-1. **Keep the source, derive the raster.** Add `source_document` (FileField) to
-   `FloorPlan` alongside the existing `background_image`. The source is the uploaded
-   PDF/DXF; `background_image` stays the derived PNG that the SVG embeds. This lets a
-   user re-crop or re-pick a page later without re-uploading.
+1. **Keep the source, derive the raster.** `FloorPlan.source_document` (FileField) holds the
+   uploaded PDF; `background_image` stays the derived PNG the SVG embeds. A user can re-pick a
+   page or re-crop later without re-uploading (`models.py`).
 
-2. **Pluggable document importers (mirror the placement registry).** A small registry
-   keyed by extension/mimetype, each importer implementing:
-   - `can_handle(filename, mimetype) -> bool`
-   - `list_pages(file) -> [PagePreview]`  (page index + a thumbnail data-URI)
-   - `render(file, page, dpi, crop_box|None) -> png_bytes`
-   This is the same push-based, import-free pattern as `placement/registry.py`, so new
-   formats (`.dwg`, image-only TIFF, SVG) drop in without touching the core.
+2. **Rendered pages persist.** A `BlueprintPage` model (FK to FloorPlan, `page_number`, `image`,
+   `thumbnail`) holds each rendered page so the picker is server-backed and re-pickable
+   (`models.py`, migration `0015_add_blueprint_import.py`).
 
-3. **Server-side rasterization.**
-   - **PDF** — PyMuPDF (`fitz`): render a page to PNG at a chosen DPI
-     (`page.get_pixmap(dpi=...)`). Prefer *rendering the page* (keeps vector line art
-     crisp) over extracting embedded raster images, though offer both — some scanned
-     blueprints are a single embedded image. No poppler system dep.
-   - **DXF (CAD)** — `ezdxf` + its drawing add-on (matplotlib or the native SVG
-     backend) to rasterize modelspace, ideally layer-aware so the user can toggle
-     layers before rasterizing. More involved (units/scale, entity coverage); ship PDF
-     first, DXF second.
+3. **Server-side rasterization in a background Job.** `RenderBlueprintPages`
+   (`jobs.py`, built on `nautobot.apps.jobs`) opens `source_document`, clears stale pages, and
+   renders each page to a full image + thumbnail under caps (max pages, per-page pixels, DPI,
+   upload size). Using a **built-in Nautobot Job** means it runs on whatever queue the platform
+   provides (Celery on stock Nautobot, the Procrastinate fork in this deployment) with **no
+   direct queue dependency** in the app.
+   - **Library: `pypdfium2`** (Google PDFium bindings, BSD-3-Clause / Apache-2.0), NOT PyMuPDF.
+     PyMuPDF is AGPL-3.0 and would impose copyleft on this Apache-2.0 package. `pypdfium2` renders
+     a page with `page.render(scale=dpi/72).to_pil()`, ships wheels, needs no system deps.
+   - **Render the page, don't extract embedded images.** Print-to-PDF sets embed the firm logo,
+     not the drawing; rendering the page is the correct default.
 
-4. **Pick + crop UX.** New viewset actions on the FloorPlan API:
-   - `POST .../document/` — upload the source file.
-   - `GET .../document/pages/` — return page thumbnails (multi-page PDF → one per page).
-   - `POST .../document/extract/` — `{page, crop_box, dpi}` → renders + crops → sets
-     `background_image`, returns the new plan.
-   The crop overlay fits the existing editing layer (`floorplan_editing.js`): reuse the
-   calibrate-style handle rectangle to draw the crop box in client space, send box in
-   normalized coords, crop server-side (Pillow) so huge renders never hit the browser.
+4. **Pick + crop UX.** New actions on `FloorPlanViewSet` (`api/views.py`):
+   - `POST .../import-pdf/` — save the PDF to `source_document` and enqueue the render Job.
+   - `GET .../pages/` — list rendered `BlueprintPage`s (page number, thumbnail + image URLs).
+   - `POST .../extract/` — `{page_number, crop_box, rotation}` → **crop then rotate** with Pillow
+     → set `background_image`, reset `bg_*` so the SVG auto-fits the new crop.
+   The client (`static/.../js/floorplan-import.js`) is a standalone "Import from PDF" modal: a
+   thumbnail page-picker grid, then a crop box over the selected page image with 90° rotate.
+   Crop is normalized to the original page; the server crops server-side so huge renders never
+   hit the browser. Deliberately decoupled from the calibrate drag layer.
 
-5. **After crop** the current calibrate/opacity/freeform flow is unchanged — this only
-   feeds a better `background_image`.
+5. **After crop** the current calibrate/opacity/freeform flow is unchanged — this only feeds a
+   better `background_image`.
 
 ## Dependencies & risks
 
-- New deps: `PyMuPDF` (PDF), `ezdxf` (+ a render backend) for DXF. Both ship wheels.
-- **Untrusted-input surface.** PDF/CAD parsers are a real attack surface. Cap page
-  count, file size, render DPI, and pixel dimensions; run extraction with a timeout;
-  consider doing it in the worker (Celery) rather than the web request for big files.
-- Storage: keep source docs out of the SVG (embed only the derived crop as base64, as
-  today). Source files can be large; store on the normal media backend.
+- Deps: `pypdfium2` (PDF) + `Pillow` (crop/thumbnail); both ship wheels, no system deps.
+- **Untrusted-input surface.** PDF parsers are an attack surface. v1 caps page count, upload
+  size, render DPI, and per-page pixels, and runs extraction in the worker (Job), not the web
+  request.
+- Storage: the source doc lives on the normal media backend; only the derived crop is embedded
+  (base64) in the SVG.
 
-## Suggested slicing
+## Still ahead
 
-- **v1** PDF only: upload → page thumbnails → pick page → crop → background. Worker-side
-  render for files over N pages/MB.
-- **v2** DXF via `ezdxf`, layer toggle before rasterize.
-- **v3** the importer registry made public so other apps can register formats.
+- **v2 — DXF (CAD)** via `ezdxf` + a render backend (matplotlib or its SVG backend), ideally
+  layer-aware so the user can toggle layers before rasterizing. More involved (units/scale,
+  entity coverage).
+- **v3 — a pluggable importer registry** mirroring `placement/registry.py`
+  (`can_handle`/`list_pages`/`render`), made public so other apps can register new formats
+  (`.dwg`, image-only TIFF, SVG) without touching the core.
+- OCR-based auto floor-naming (v1 pages have no text layer, so the picker is manual).

@@ -279,14 +279,28 @@ Once tiles have been added, the floor plan can no longer be resized.
 In **freeform** mode, objects are not confined to grid cells. This is the mode to use when you want markers to sit exactly where equipment physically is, especially over an image of the real space.
 
 !!! note
-    In this release, a plan's placement mode and blueprint background are set through the REST API, not the create/edit form. Converting a grid plan to freeform is available directly from the plan view. The dedicated form controls for choosing a mode and uploading a background image are planned for a later release. The interactive tools below (calibrate, place, drag) appear on the rendered plan once it is in freeform mode.
+    In this release, a plan's placement **mode** is set through the REST API or by converting a grid plan to freeform directly from the plan view (a dedicated form control for the mode is planned). The **blueprint background** can be set from the plan view by [importing a PDF](#importing-a-blueprint-from-a-pdf), or through the REST API. The interactive tools below (calibrate, place, drag) appear on the rendered plan once it has a background.
 
 ### The Blueprint Background
 
-A freeform plan can carry a background image (for example a floor plan export, a CAD drawing rendered to an image, or an architectural PDF page saved as an image). The image renders behind the grid and never intercepts clicks in view mode, and a **Blueprint opacity** slider controls how prominent it is.
+A freeform plan can carry a background image behind the grid (a floor plan export, a CAD drawing rendered to an image, or a page from an architectural PDF). The image never intercepts clicks in view mode, and a **Blueprint opacity** slider controls how prominent it is. The easiest way to add one is to [import a PDF](#importing-a-blueprint-from-a-pdf) and crop the page you want; you can also upload a pre-cropped image through the REST API.
 
 ![Freeform floor plan on a blueprint background](../images/freeform-blueprint-light.png#only-light){ .on-glb }
 ![Freeform floor plan on a blueprint background](../images/freeform-blueprint-dark.png#only-dark){ .on-glb }
+
+### Importing a Blueprint from a PDF
+
+Real floor plans usually arrive as a multi-page architectural PDF. Rather than exporting and cropping a page in another tool, import the PDF directly:
+
+1. Open the Floor Plan and click **Import from PDF**.
+2. Choose a PDF and press **Upload & render**. Each page is rendered to an image in the background (a **Render Blueprint PDF Pages** job you can watch under **Jobs**), so a large set does not block the browser.
+3. Pick the page you want from the thumbnail grid.
+4. Drag the crop box to frame just the drawing (leaving out the title block and border), rotate it if the page came in sideways or upside down, and click **Set as background**.
+
+The cropped page becomes the plan's background image, ready to [calibrate](#calibrating-the-image) against the grid. The uploaded PDF is kept with the plan, so you can re-open **Import from PDF** later to pick a different page or re-crop without uploading again.
+
+!!! note
+    Only PDF uploads are supported today. Rendering runs under safety limits on page count, file size, and resolution. CAD (`.dxf`) import is planned for a later release.
 
 ### Calibrating the Image
 
