@@ -8,7 +8,6 @@ user can pick a page and crop it into the plan's ``background_image``.
 
 import io
 
-import pypdfium2 as pdfium
 from django.core.files.base import ContentFile
 from nautobot.apps.jobs import Job, ObjectVar, register_jobs
 from PIL import Image
@@ -44,6 +43,9 @@ class RenderBlueprintPages(Job):
 
     def run(self, floor_plan):  # pylint: disable=arguments-differ
         """Render every page of ``floor_plan.source_document`` into BlueprintPage rows."""
+        # Lazy import: keep app startup resilient if the wheel isn't installed; only render needs it.
+        import pypdfium2 as pdfium  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+
         document = floor_plan.source_document
         if not document:
             raise ValueError("Floor plan has no source_document to render.")
