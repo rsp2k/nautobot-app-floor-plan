@@ -262,3 +262,16 @@ class FloorPlanObjectTypeUIViewSet(NautobotUIViewSet):
     queryset = models.FloorPlanObjectType.objects.all()
     serializer_class = serializers.FloorPlanObjectTypeSerializer
     table_class = tables.FloorPlanObjectTypeTable
+
+
+class FloorPlanLayerUIViewSet(NautobotUIViewSet):
+    """ViewSet for marker-visibility layers (FloorPlanLayer)."""
+
+    bulk_update_form_class = forms.FloorPlanLayerBulkEditForm
+    filterset_class = filters.FloorPlanLayerFilterSet
+    filterset_form_class = forms.FloorPlanLayerFilterForm
+    form_class = forms.FloorPlanLayerForm
+    lookup_field = "pk"
+    queryset = models.FloorPlanLayer.objects.all()
+    serializer_class = serializers.FloorPlanLayerSerializer
+    table_class = tables.FloorPlanLayerTable

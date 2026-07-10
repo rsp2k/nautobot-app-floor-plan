@@ -153,6 +153,15 @@
     {% endif %}
     {% endif %}
 
+    {% comment %} Layers: client-side show/hide + dim of markers by type (and named layers). Available
+    to any viewer; the button is revealed by floorplan-layers.js once the SVG has markers. {% endcomment %}
+    <div class="floor-plan-layers-controls d-print-none" style="margin-top: 8px;">
+        <button type="button" class="btn btn-sm btn-default" id="layers-button" aria-expanded="false" hidden>
+            <span aria-hidden="true" class="mdi mdi-layers-outline"></span> Layers
+        </button>
+        <div id="layers-panel" class="floor-plan-layers-panel" hidden role="group" aria-label="Layers"></div>
+    </div>
+
     <div class="text-center">
         <a class="rack_elevation_save_svg_link" download="floor_plan_{{ object.location.name }}.svg" href="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-svg' pk=object.pk %}">
             <span class="mdi mdi-content-save-outline"></span> Save SVG
@@ -178,6 +187,7 @@
     <script src="{% static 'nautobot_floor_plan/js/floorplan-coords.js' %}?v={% now 'U' %}"></script>
     <script src="{% static 'nautobot_floor_plan/js/floorplan_editing.js' %}?v={% now 'U' %}"></script>
     <script src="{% static 'nautobot_floor_plan/js/floorplan-import.js' %}?v={% now 'U' %}"></script>
+    <script src="{% static 'nautobot_floor_plan/js/floorplan-layers.js' %}?v={% now 'U' %}"></script>
     <script>
         const ZOOM_DURATION = {{ zoom_duration }};
         const HIGHLIGHT_DURATION = {{ highlight_duration }};
@@ -200,6 +210,7 @@
              data-can-calibrate="{{ can_calibrate|yesno:'true,false' }}"
              data-tile-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplantile-list' %}"
              data-floorplan-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-detail' pk=object.pk %}"
+             data-layers-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-layers' pk=object.pk %}"
              {% if can_place %}data-place-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplantile-place' %}" data-placeable-types-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-placeable-types' pk=object.pk %}"{% endif %}
              {% if can_calibrate %}data-convert-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-convert-to-freeform' pk=object.pk %}"
              data-import-pdf-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-import-pdf' pk=object.pk %}"

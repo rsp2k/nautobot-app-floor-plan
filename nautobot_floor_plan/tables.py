@@ -191,3 +191,37 @@ class FloorPlanObjectTypeTable(BaseTable):
             "enabled",
             "actions",
         )
+
+
+class FloorPlanLayerTable(BaseTable):
+    # pylint: disable=too-few-public-methods
+    """Table for the FloorPlanLayer list view."""
+
+    pk = ToggleColumn()
+    name = tables.Column(linkify=True)
+    floor_plan = tables.Column(linkify=True, verbose_name="Scope")
+    actions = ButtonsColumn(models.FloorPlanLayer)
+
+    class Meta(BaseTable.Meta):
+        """Meta attributes."""
+
+        model = models.FloorPlanLayer
+        fields = (
+            "pk",
+            "name",
+            "floor_plan",
+            "color",
+            "opacity",
+            "default_visible",
+            "display_order",
+            "tags",
+            "actions",
+        )
+        default_columns = (
+            "pk",
+            "name",
+            "floor_plan",
+            "default_visible",
+            "display_order",
+            "actions",
+        )

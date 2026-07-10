@@ -324,8 +324,10 @@ class FloorPlanSVGTestCase(TestCase):
         self.svg._draw_tile = MagicMock()
         self.svg._draw_legend = MagicMock()
 
-        # Call method
-        result = self.svg.render()
+        # Call method. resolve_layers is a real DB-backed collaborator; stub it here since this test
+        # drives render() with a fully mocked floor_plan (no real rows to resolve against).
+        with patch("nautobot_floor_plan.layers.resolve_layers", return_value={}):
+            result = self.svg.render()
 
         # Assertions
         self.svg._setup_drawing.assert_called_once()

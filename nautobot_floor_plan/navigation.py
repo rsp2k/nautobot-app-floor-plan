@@ -29,6 +29,12 @@ menu_items = (
                         weight=310,
                         permissions=["nautobot_floor_plan.view_floorplanobjecttype"],
                     ),
+                    NavMenuItem(
+                        name="Floor Plan Layers",
+                        link="plugins:nautobot_floor_plan:floorplanlayer_list",
+                        weight=320,
+                        permissions=["nautobot_floor_plan.view_floorplanlayer"],
+                    ),
                 ),
             ),
         ),
