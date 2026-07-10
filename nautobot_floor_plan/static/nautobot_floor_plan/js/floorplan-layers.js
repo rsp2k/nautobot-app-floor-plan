@@ -1,13 +1,15 @@
 /**
  * Floor plan layers: client-side show/hide and dim of placed-object markers.
  *
- * Two kinds of group compose:
- *   - Content-type toggles, derived from each marker's `data-content-type` (works with no server
- *     state — the "AP layer" for free).
- *   - Named layers (data-layers-api, Slice B), whose membership the server resolved into each
- *     marker's `data-layers`.
- * A marker is visible when its type is on AND (it's in no named layer OR any of its layers is on).
- * Opacity is the minimum of the applicable groups' dim values. Status color is never touched.
+ * Two kinds of group compose, with named layers taking precedence:
+ *   - Named layers (data-layers-api), whose membership the server resolved into each marker's
+ *     `data-layers`. If a marker is in any named layer, ONLY its layers govern it.
+ *   - Content-type toggles, derived from each marker's `data-content-type`, govern markers that
+ *     belong to no named layer (the "AP layer" for free, with no server state).
+ * So a layer's checkbox hides its own members directly, and turning a type off only touches the
+ * ungrouped markers of that type. A marker is visible when any of its governing groups is on
+ * (OR across a marker's layers). Opacity is the strongest (lowest) dim among the groups showing it.
+ * Status color is never touched.
  *
  * Purely client-side (CSS display/opacity on already-rendered markers), so it can't affect the
  * viewBox-based pan/zoom. Standalone, like floorplan-import.js.
@@ -63,19 +65,18 @@
 
     function applyLayers() {
       markers().forEach((g) => {
-        // Every group this marker belongs to: its content-type group plus any named layers.
-        const memberships = [];
-        const ctGroup = groups.get("ct:" + g.getAttribute("data-content-type"));
-        if (ctGroup) memberships.push(ctGroup);
-        (g.getAttribute("data-layers") || "")
+        // Named layers take precedence: a marker in any named layer is governed only by its layers.
+        // A marker in no named layer falls back to its content-type group.
+        const layerMemberships = (g.getAttribute("data-layers") || "")
           .split(/\s+/)
           .filter(Boolean)
-          .forEach((id) => {
-            const lg = groups.get("layer:" + id);
-            if (lg) memberships.push(lg);
-          });
+          .map((id) => groups.get("layer:" + id))
+          .filter(Boolean);
+        const memberships = layerMemberships.length
+          ? layerMemberships
+          : [groups.get("ct:" + g.getAttribute("data-content-type"))].filter(Boolean);
 
-        // OR visibility: hidden only when every group it belongs to is off. In no group -> visible.
+        // Visible when any governing group is on (OR across a multi-layer marker's layers).
         const visible = memberships.length === 0 || memberships.some((m) => m.visible);
         const target = g.closest("a") || g;
         target.style.display = visible ? "" : "none";
