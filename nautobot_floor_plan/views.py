@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from django.db.models import Case, CharField, Value, When
 from django_tables2 import RequestConfig
 from nautobot.apps.ui import ObjectDetailContent, ObjectFieldsPanel, SectionChoices
+from nautobot.core.ui.choices import LayoutChoices
 from nautobot.apps.views import (
     NautobotUIViewSet,
     ObjectChangeLogViewMixin,
@@ -37,6 +38,9 @@ class FloorPlanUIViewSet(NautobotUIViewSet):  # TODO we only need a subset of vi
     table_class = tables.FloorPlanTable
 
     object_detail_content = ObjectDetailContent(
+        # Lead with the interactive plan (full-width on top), then the metadata columns below, so a
+        # viewer sees the floor plan without scrolling.
+        layout=LayoutChoices.ONE_OVER_TWO,
         panels=[
             ObjectFieldsPanel(
                 weight=100,

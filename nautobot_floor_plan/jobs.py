@@ -17,7 +17,7 @@ from nautobot_floor_plan.models import BlueprintPage, FloorPlan
 # Caps for the untrusted-parser surface. A malformed or hostile PDF should never render forever or
 # exhaust memory, so bound page count, per-page pixels, and resolution before rasterizing.
 MAX_PAGES = 50
-RENDER_DPI = 200
+RENDER_DPI = 400
 MAX_PIXELS = 40_000_000  # ~40 MP per page ceiling; scale is reduced to fit if a page exceeds it
 THUMBNAIL_MAX_PX = 320  # longest edge of the picker thumbnail
 

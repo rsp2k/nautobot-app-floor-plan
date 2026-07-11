@@ -146,6 +146,16 @@
                 <output id="blueprint-scale-output" for="blueprint-scale-range">100</output>
                 <span aria-hidden="true">%</span>
             </div>
+            <div class="floor-plan-tools-row floor-plan-slider-row">
+                <label for="blueprint-rotation-range">Blueprint rotation</label>
+                <input type="range" id="blueprint-rotation-range" min="-180" max="180" step="5"
+                       value="{{ object.bg_rotation|default:0 }}"
+                       aria-label="Blueprint rotation degrees">
+                <input type="number" id="blueprint-rotation-number" min="-180" max="180" step="5"
+                       value="{{ object.bg_rotation|default:0 }}"
+                       aria-label="Blueprint rotation degrees" class="floor-plan-slider-num">
+                <span aria-hidden="true">°</span>
+            </div>
             {% endif %}
 
             {% if can_calibrate %}

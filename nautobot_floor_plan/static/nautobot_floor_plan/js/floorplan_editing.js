@@ -211,6 +211,8 @@ function initFloorPlanEditing() {
         var scaleOutput = document.getElementById("blueprint-scale-output");
         var iconRange = document.getElementById("icon-scale-range");
         var iconOutput = document.getElementById("icon-scale-output");
+        var rotationRange = document.getElementById("blueprint-rotation-range");
+        var rotationNumber = document.getElementById("blueprint-rotation-number");
         var placePanel = document.getElementById("place-object-panel");
 
         var floorplanUrl = container.getAttribute("data-floorplan-api");
@@ -361,8 +363,16 @@ function initFloorPlanEditing() {
             if (window.gsap) gsap.killTweensOf(svg);
             if (uiMode === "calibrate") {
                 startCalibrate(hit, e);
-            } else if (uiMode === "place" && current && current.placeDragStart) {
-                current.placeDragStart(hit, e); // place/a11y agent registers the marker-drag handler
+            } else if (uiMode === "place") {
+                // This capture-phase router runs before the handle's own pointerdown listener and halts
+                // propagation, so it must itself decide resize-vs-move: a press that starts on the marker's
+                // resize handle scales just that icon; anywhere else on the marker moves it.
+                var resizeHandle = e.target.closest && e.target.closest(".floor-plan-resize-handle");
+                if (resizeHandle && hit.contains(resizeHandle)) {
+                    startResize(hit, resizeHandle, e);
+                } else if (current && current.placeDragStart) {
+                    current.placeDragStart(hit, e); // place/a11y agent registers the marker-drag handler
+                }
             }
         }
         // BLOCKER 1: neutralize the bubble-phase pan property handler for marker/handle gestures.
@@ -732,6 +742,33 @@ function initFloorPlanEditing() {
             if (opacityNumber) {
                 opacityNumber.addEventListener("input", function () { setOpacityLive(opacityNumber.value); });
                 opacityNumber.addEventListener("change", function () { commitOpacity(opacityNumber.value); });
+            }
+        }
+
+        // ── Blueprint rotation (about the blueprint center; shares the floorplan channel) ──
+        if ((rotationRange || rotationNumber) && image) {
+            var setRotationLive = function (v) {
+                var deg = clamp(Math.round(parseFloat(v) || 0), -180, 180);
+                if (rotationRange) rotationRange.value = deg;
+                if (rotationNumber) rotationNumber.value = deg;
+                bg.rot = deg;
+                applyBlueprintTransform();
+                return deg;
+            };
+            var commitRotation = function (v) {
+                var deg = setRotationLive(v);
+                var ch = channelFor("floorplan", floorplanUrl);
+                ch.schedule({ bg_rotation: deg });
+                ch.flush();
+                announce("Blueprint rotation set to " + deg + " degrees.");
+            };
+            if (rotationRange) {
+                rotationRange.addEventListener("input", function () { setRotationLive(rotationRange.value); });
+                rotationRange.addEventListener("change", function () { commitRotation(rotationRange.value); });
+            }
+            if (rotationNumber) {
+                rotationNumber.addEventListener("input", function () { setRotationLive(rotationNumber.value); });
+                rotationNumber.addEventListener("change", function () { commitRotation(rotationNumber.value); });
             }
         }
 
