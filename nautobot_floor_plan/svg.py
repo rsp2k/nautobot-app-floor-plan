@@ -49,12 +49,13 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
     OBJECT_ORIENTATION_OFFSET = 14
     RACKGROUP_TEXT_OFFSET = 12
     Y_LABEL_TEXT_OFFSET = 34
-    # Fallback normalized footprint for a freeform object whose width/height are unset.
-    DEFAULT_MARKER_FRAC = 0.04
-    # Per-type marker icon sizing and legend layout.
-    ICON_MIN = 18
-    ICON_MAX = 44
-    ICON_FOOTPRINT_FRAC = 0.55
+    # Freeform marker sizing. A marker's on-screen box is a fixed size in user units --
+    # MARKER_BASE * plan.icon_scale * tile.icon_scale -- so every marker matches regardless of its
+    # grid footprint (width/height no longer drive size). The glyph fills a fraction of that box.
+    MARKER_BASE = 90
+    MARKER_MIN = 32
+    MARKER_MAX = 320
+    ICON_GLYPH_FRAC = 0.5
     CHIP_PAD = 4
     LEGEND_ROW_H = 22
     LEGEND_ICON = 14
@@ -190,6 +191,15 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
             ys.append(cy + dx * sin_a + dy * cos_a)
         return (min(xs), min(ys), max(xs), max(ys))
 
+    def _marker_size(self, tile):
+        """On-screen box size (user units) of a freeform marker: base * plan scale * per-tile scale.
+
+        Fixed size (independent of the tile's grid footprint) so every marker matches at a given
+        scale; clamped so extreme scales stay usable.
+        """
+        scale = (self.floor_plan.icon_scale or 1.0) * (tile.icon_scale or 1.0)
+        return max(self.MARKER_MIN, min(self.MARKER_MAX, self.MARKER_BASE * scale))
+
     def _drawing_extents(self, default_width, default_depth):
         """Compute the viewBox (x, y, w, h) enclosing the grid frame, blueprint, and freeform markers.
 
@@ -212,9 +222,10 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
                 continue
             center_x = cx + tile.pos_x * cw
             center_y = cy + tile.pos_y * ch
-            pw = (tile.width if tile.width is not None else self.DEFAULT_MARKER_FRAC) * cw
-            ph = (tile.height if tile.height is not None else self.DEFAULT_MARKER_FRAC) * ch
-            rb = self._rotated_bounds(center_x - pw / 2, center_y - ph / 2, pw, ph, tile.rotation or 0)
+            marker = self._marker_size(tile)
+            rb = self._rotated_bounds(
+                center_x - marker / 2, center_y - marker / 2, marker, marker, tile.rotation or 0
+            )
             min_x, min_y = min(min_x, rb[0]), min(min_y, rb[1])
             max_x, max_y = max(max_x, rb[2]), max(max_y, rb[3])
             expanded = True
@@ -949,9 +960,8 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
                 logger.debug("glyph_resolver for %s raised; using static glyph.", placement.key, exc_info=True)
         return resolve_glyph(placement.icon, placement.glyph_paths_data, placement.glyph_viewbox)
 
-    def _draw_icon(self, drawing, parent, footprint, placement, color, center=(0, 0), obj=None):
-        """Draw a type glyph inside a legibility chip, centered at ``center`` within a marker group."""
-        size = max(self.ICON_MIN, min(self.ICON_MAX, footprint * self.ICON_FOOTPRINT_FRAC))
+    def _draw_icon(self, drawing, parent, size, placement, color, center=(0, 0), obj=None):
+        """Draw a type glyph sized ``size`` (user units) inside a legibility chip, centered at ``center``."""
         half = size / 2
         pad = self.CHIP_PAD
         cx, cy = center
@@ -983,8 +993,8 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         cx, cy, cw, ch = self.content_rect
         center_x = cx + tile.pos_x * cw
         center_y = cy + tile.pos_y * ch
-        pw = (tile.width if tile.width is not None else self.DEFAULT_MARKER_FRAC) * cw
-        ph = (tile.height if tile.height is not None else self.DEFAULT_MARKER_FRAC) * ch
+        marker = self._marker_size(tile)
+        half = marker / 2
         rotation = tile.rotation or 0
         label = placement.label if placement is not None else obj._meta.verbose_name.title()
 
@@ -1005,6 +1015,9 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         group["data-pos-x"] = tile.pos_x
         group["data-pos-y"] = tile.pos_y
         group["data-rotation"] = rotation
+        # Per-marker size, so the interactive resize handle can draw without knowing the base constant.
+        group["data-icon-scale"] = tile.icon_scale if tile.icon_scale is not None else 1.0
+        group["data-marker-size"] = marker
         # Roving-tabindex focusable + accessible name. tabindex="-1" by default; JS promotes the first
         # marker in reading order to "0" so Tab lands on it, and moves it as the user arrows around.
         group["role"] = "button"
@@ -1017,25 +1030,25 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         layer_ids = self._layer_membership.get((obj._meta.label_lower, obj.pk)) if self._layer_membership else None
         if layer_ids:
             group["data-layers"] = " ".join(layer_ids)
-        # Backing rect: status fill and drag target.
+        # Backing rect: status fill and drag target, a fixed square sized to the marker box.
         group.add(
             drawing.rect(
-                insert=(-pw / 2, -ph / 2),
-                size=(pw, ph),
+                insert=(-half, -half),
+                size=(marker, marker),
                 rx=self.CORNER_RADIUS,
                 class_="object",
                 style=f"fill: #{color}",
             )
         )
-        icon_size = max(self.ICON_MIN, min(self.ICON_MAX, min(pw, ph) * self.ICON_FOOTPRINT_FRAC))
-        self._draw_icon(drawing, group, min(pw, ph), placement, color, center=(0, -icon_size * 0.15), obj=obj)
-        self._draw_freeform_text(drawing, group, obj, color, icon_size / 2 + self.TEXT_LINE_HEIGHT)
+        glyph_size = marker * self.ICON_GLYPH_FRAC
+        self._draw_icon(drawing, group, glyph_size, placement, color, center=(0, -glyph_size * 0.15), obj=obj)
+        self._draw_freeform_text(drawing, group, obj, color, half + self.TEXT_LINE_HEIGHT)
         # Hidden keyboard focus ring, revealed by JS toggling `.is-focused`. non-scaling-stroke keeps
         # the outline a constant screen width at every zoom; drawn last so it renders on top.
-        ring_pad = min(pw, ph) * 0.12
+        ring_pad = marker * 0.12
         focus_ring = drawing.rect(
-            insert=(-pw / 2 - ring_pad, -ph / 2 - ring_pad),
-            size=(pw + 2 * ring_pad, ph + 2 * ring_pad),
+            insert=(-half - ring_pad, -half - ring_pad),
+            size=(marker + 2 * ring_pad, marker + 2 * ring_pad),
             rx=self.CORNER_RADIUS,
             class_="focus-ring",
         )

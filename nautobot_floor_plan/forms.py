@@ -523,8 +523,8 @@ class FloorPlanTileForm(NautobotModelForm):
 
         model = models.FloorPlanTile
         fields = "__all__"
-        # Freeform placement fields (pos_x/pos_y/width/height/rotation) are set by drag placement,
-        # not this grid-oriented form, so keep them out of it.
+        # Freeform placement/sizing fields (pos_x/pos_y/width/height/rotation/icon_scale) are set by
+        # drag placement and the canvas sizing controls, not this grid-oriented form, so keep them out.
         exclude = [  # pylint: disable=modelform-uses-exclude
             "allocation_type",
             "on_group_tile",
@@ -533,6 +533,7 @@ class FloorPlanTileForm(NautobotModelForm):
             "width",
             "height",
             "rotation",
+            "icon_scale",
         ]
 
     fieldsets = (

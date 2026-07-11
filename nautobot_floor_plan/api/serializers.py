@@ -13,9 +13,10 @@ from nautobot_floor_plan import models
 from nautobot_floor_plan.placement import registry
 
 # Geometry-only fields that the drag/calibrate client may PATCH in isolation.
-TILE_GEOMETRY_FIELDS = {"pos_x", "pos_y", "width", "height", "rotation"}
-# Calibration/opacity fields the client PATCHes on the plan while dragging the blueprint.
-CALIBRATION_FIELDS = {"bg_x", "bg_y", "bg_width", "bg_height", "bg_rotation", "background_opacity"}
+TILE_GEOMETRY_FIELDS = {"pos_x", "pos_y", "width", "height", "rotation", "icon_scale"}
+# Calibration/opacity/sizing fields the client PATCHes on the plan while dragging the blueprint or
+# adjusting the icon-size slider.
+CALIBRATION_FIELDS = {"bg_x", "bg_y", "bg_width", "bg_height", "bg_rotation", "background_opacity", "icon_scale"}
 
 
 def _default_tile_status():
@@ -40,6 +41,7 @@ class FloorPlanSerializer(NautobotModelSerializer, TaggedModelSerializerMixin): 
     bg_width = serializers.FloatField(required=False, allow_null=True, validators=[validate_finite])
     bg_height = serializers.FloatField(required=False, allow_null=True, validators=[validate_finite])
     bg_rotation = serializers.FloatField(required=False, validators=[validate_finite])
+    icon_scale = serializers.FloatField(required=False, min_value=0.1, validators=[validate_finite])
 
     class Meta:
         """Meta attributes."""
@@ -79,6 +81,7 @@ class FloorPlanTileSerializer(NautobotModelSerializer, TaggedModelSerializerMixi
     width = serializers.FloatField(required=False, allow_null=True, min_value=0, validators=[validate_finite])
     height = serializers.FloatField(required=False, allow_null=True, min_value=0, validators=[validate_finite])
     rotation = serializers.FloatField(required=False, validators=[validate_finite])
+    icon_scale = serializers.FloatField(required=False, min_value=0.1, validators=[validate_finite])
 
     class Meta:
         """Meta attributes."""
