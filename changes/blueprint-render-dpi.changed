@@ -1,0 +1,1 @@
+Render imported blueprint PDF pages at 400 DPI (was 200) so fine plan text stays legible when the drawing fills the frame.
