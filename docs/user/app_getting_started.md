@@ -279,7 +279,7 @@ Once tiles have been added, the floor plan can no longer be resized.
 In **freeform** mode, objects are not confined to grid cells. This is the mode to use when you want markers to sit exactly where equipment physically is, especially over an image of the real space.
 
 !!! note
-    In this release, a plan's placement **mode** is set through the REST API or by converting a grid plan to freeform directly from the plan view (a dedicated form control for the mode is planned). The **blueprint background** can be set from the plan view by [importing a PDF](#importing-a-blueprint-from-a-pdf), or through the REST API. The interactive tools below (calibrate, place, drag) appear on the rendered plan once it has a background.
+    In this release, a plan's placement **mode** is set through the REST API or by converting a grid plan to freeform directly from the plan view (a dedicated form control for the mode is planned). The **blueprint background** can be set from the plan view by [importing a PDF](#importing-a-blueprint-from-a-pdf), or through the REST API. The interactive tools below (place, calibrate, and the sizing sliders) live behind the **Edit** button on the plan's toolbar; open it to switch between View, Place, and Calibrate.
 
 ### The Blueprint Background
 
@@ -309,9 +309,48 @@ Switch the plan into **calibrate** mode to align the image with the grid. You ca
 ![Calibrating the blueprint image](../images/freeform-calibrate-light.png#only-light){ .on-glb }
 ![Calibrating the blueprint image](../images/freeform-calibrate-dark.png#only-dark){ .on-glb }
 
+### The Edit toolbar
+
+The rendered plan leads with the canvas itself. A compact toolbar floats over the top-left corner with an **Edit** button (and **Layers**, plus zoom controls). Clicking **Edit** opens a drawer holding the editing tools — the View/Place/Calibrate mode toggle, **Import from PDF**, the blueprint opacity and scale sliders, and the icon size slider — so View mode stays uncluttered until you need to make a change.
+
+![Plan-first layout with the Edit toolbar](../images/edit-toolbar.png){ .on-glb }
+
 ### Placing and Moving Objects
 
 In **place** mode, drop an object's marker anywhere on the plan and drag it to reposition. The new position is saved as soon as you drop it, so what you see on the plan is what is stored. Each object type renders with its own icon and color, and a legend keeps types distinguishable.
+
+### Sizing markers
+
+Markers share one base size so a rack and a camera read at the same scale regardless of their footprint. Two controls adjust this:
+
+- **Icon size** (in the Edit drawer) scales *every* marker on the plan at once — useful for making a dense plan legible or a sparse one less shouty.
+- **Per-marker resize**: in Place mode, select a marker and drag the round handle at its corner (or press `+` / `-`) to scale just that one, on top of the global size.
+
+Both scales are saved as you adjust them. A **Blueprint scale** slider in the same drawer resizes the background image the same way.
+
+![Edit drawer with the icon size slider and a resized marker](../images/edit-drawer.png){ .on-glb }
+
+## Filtering the plan with layers
+
+A busy plan can carry racks, devices, cameras, access points, and power gear all at once. **Layers** let you focus on a subset without changing the plan. Click **Layers** on the toolbar to open the panel.
+
+The panel has two sections:
+
+- **Layers** — named groups resolved on the server (see below), each with a color swatch.
+- **By type** — one row per object type present on the plan.
+
+Every row has a checkbox to show or hide, and a slider to dim. Hiding or dimming never changes a marker's Status color — layers only control visibility and opacity.
+
+### Named layers
+
+Create reusable layers under **Organization → Floor Plan Layers**. A layer's membership is the union of:
+
+- **Content types**, **tags**, and **dynamic groups** (rule-based), plus
+- a hand-picked **static set** of individual objects.
+
+A layer is either **global** (applies to every plan) or scoped to one plan. Named layers take precedence over the *By type* toggles: a layer's checkbox hides its own members directly, while the type toggles govern only markers that belong to no named layer. So to isolate one system — say, show only the security cameras — turn the type toggles off and leave that layer on.
+
+![Layers panel with named layers and type toggles](../images/layers-panel.png){ .on-glb }
 
 ## Defining Placeable Object Types
 

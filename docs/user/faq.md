@@ -31,3 +31,11 @@ By design, a live object's Status color takes precedence over a type's default c
 ## I moved a marker in freeform mode. Is the new position saved?
 
 Yes. Dragging a marker persists its position through the API as soon as you drop it, so the placement is stored on the Floor Plan Tile, not just visually shifted in your browser.
+
+## I unchecked an object type in the Layers panel but some of those markers stayed. Why?
+
+Those markers belong to a named **Floor Plan Layer**, and named layers take precedence over the *By type* toggles. A layer keeps its members visible even when their type is unchecked, so you can turn all the type toggles off and still see just that layer (the isolation workflow). To hide those markers, uncheck the layer itself, or turn its layer off as well.
+
+## How do I make all the marker icons bigger or smaller?
+
+Open the **Edit** drawer on the plan's toolbar and use the **Icon size** slider — it scales every marker on the plan to one base size. To resize a single marker instead, switch to Place mode, select it, and drag the corner handle (or press `+` / `-`).

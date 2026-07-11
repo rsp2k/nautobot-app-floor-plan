@@ -32,6 +32,9 @@ Included is a non-exhaustive list of capabilities beyond a standard MVC (model v
 - Provides a blueprint background image per Floor Plan, with drag and rotate calibration to align a real floor plan or CAD drawing to the grid.
 - Provides freeform placement of objects at any position on the plan, in addition to grid tiles, with drag-to-place directly on the rendered SVG.
 - Provides per-type marker icons (glyphs), colors, and an on-plan legend so different object types are distinguishable at a glance.
+- Provides marker-visibility **layers** to show, hide, and dim placed objects by content type or by named groups built from tags, dynamic groups, content types, and a hand-picked set (global or per-plan). Status color is never changed.
+- Provides marker **sizing** controls: a global icon-size slider that gives every marker one base size regardless of footprint, and a per-marker corner handle to resize an individual marker.
+- Provides a plan-first detail view where the rendered canvas is the focus and the editing tools collapse behind a floating **Edit** toolbar.
 - Provides the ability to define new placeable object types, glyphs, and colors from the web UI, or to override the built-in ones, without changing code.
 - Provides an extension point for other apps to register their own object types as placeable, each with its own icon and color.
 - Provides visualization of Power Panels, and Racks being assigned to a Rack Group on a floor map.
@@ -63,7 +66,8 @@ This App:
 
 - Adds a "Location Floor Plans" menu item to Nautobot's "Organization" menu.
 - Adds a "Floor Plan Object Types" menu item for defining placeable types, glyphs, and colors from the UI.
-- Adds four new database models, "Floor Plan", "Floor Plan Tile", "Floor Plan Custom Axis Label", and "Floor Plan Object Type".
+- Adds a "Floor Plan Layers" menu item for defining reusable marker-visibility layers.
+- Adds new database models, "Floor Plan", "Floor Plan Tile", "Floor Plan Custom Axis Label", "Floor Plan Object Type", and "Floor Plan Layer" (with a through model for a layer's static object set).
 - Adds UI and REST API endpoints for performing standard create/retrieve/update/delete (CRUD) operations on these models.
 - Extends the detail view of Nautobot Devices, Power Feeds, Power Panels, and Racks.
     - Includes a "View on Floor Plan" button if the Object is on a "Floor Plan Tile".

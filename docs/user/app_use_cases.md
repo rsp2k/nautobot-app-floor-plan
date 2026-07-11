@@ -32,6 +32,12 @@ When you have a real floor plan, use **Import from PDF** to upload the architect
 ![Calibrating the blueprint image](../images/freeform-calibrate-light.png#only-light){ .on-glb }
 ![Calibrating the blueprint image](../images/freeform-calibrate-dark.png#only-dark){ .on-glb }
 
+## Focusing on a subsystem with layers
+
+A production floor can hold racks, devices, cameras, access points, and power gear at once. When you want to reason about one system, open the **Layers** panel and hide or dim the rest. You can filter by object type on the spot, or build reusable **Floor Plan Layers** whose membership comes from tags, dynamic groups, content types, or a hand-picked set — for example a "CCTV" layer that follows a tag, or an "AP heat-map" view. Because named layers take precedence over the type toggles, isolating one system is a matter of turning the type toggles off and leaving the layer on. Status colors are never changed, so a faulted marker still reads as faulted even when dimmed.
+
+![Isolating a subsystem with a named layer](../images/layers-isolate.png){ .on-glb }
+
 ## Defining Placeable Types and Glyphs
 
 The **Floor Plan Object Types** page lets you decide which object types can be placed and how they look, without touching code. Pick a built-in glyph or supply your own SVG, set a color and legend order, and optionally override a built-in type. This is how you add a vocabulary specific to your environment (for example medical equipment, cameras, or access points) or restyle the defaults.

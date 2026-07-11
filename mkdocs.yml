@@ -144,6 +144,8 @@ nav:
           - Freeform Editing (Wave D): "dev/wave_d_js_reconciled.md"
           - Freeform Editing Spec (Wave D): "dev/wave_d_spec.md"
           - Document Import Roadmap: "dev/document_import_roadmap.md"
+          - Marker-Visibility Layers: "dev/layers_design.md"
+          - Plan-First Edit Mode & Sizing: "dev/edit_mode_ux.md"
       - Code Reference:
           - "dev/code_reference/index.md"
           - Package: "dev/code_reference/package.md"
