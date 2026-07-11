@@ -1,0 +1,1 @@
+Freeform floor plans now size the drawing to the blueprint (and any placed markers) instead of letterboxing it inside the full grid frame, so the plan uses the available viewport. Grid mode is unchanged.

@@ -1,5 +1,6 @@
 """Tests for the SVG rendering functionality of the Nautobot Floor Plan app."""
 
+import re
 from unittest.mock import ANY, MagicMock, patch
 
 from django.contrib.auth import get_user_model
@@ -671,6 +672,46 @@ class FloorPlanBlueprintSVGTests(TestCase):
         # content_w = 5 * 150 = 750; center = 26 + 0.5 * 750 = 401.
         self.assertIn("translate(401.0,401.0)", svg_str)
         self.assertIn("data-tile-id", svg_str)
+
+    @staticmethod
+    def _viewbox(svg_str):
+        """Extract (min_x, min_y, width, height) floats from the rendered ``<svg viewBox=...>``."""
+        match = re.search(r'viewBox="([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)"', svg_str)
+        assert match, "rendered SVG has no viewBox"
+        return tuple(float(value) for value in match.groups())
+
+    def test_freeform_blueprint_fills_viewport_grid_unchanged(self):
+        """Freeform sizes the viewBox to the blueprint (not the grid frame); grid keeps the full frame.
+
+        A landscape (200x100) blueprint fit into the square 5x5 content rect (750x750) letterboxes to
+        full width and half height. In freeform mode the viewBox hugs that ~375-tall rect so the drawing
+        fills the viewport; in grid mode the viewBox still spans the whole grid frame so cells and axis
+        labels stay visible.
+        """
+        plan = models.FloorPlan.objects.create(
+            location=self.floor,
+            x_size=5,
+            y_size=5,
+            x_origin_seed=1,
+            y_origin_seed=1,
+            background_image=self._image_file(size=(200, 100)),
+        )
+
+        # Grid mode (default): the viewBox covers the full grid frame.
+        _, _, grid_w, grid_h = self._viewbox(self._render(plan))
+        self.assertGreater(grid_h, 700)
+
+        # Freeform mode: the viewBox hugs the letterboxed blueprint — full width, ~half height.
+        plan.placement_mode = PlacementModeChoices.FREEFORM
+        plan.show_grid = False
+        plan.save()
+        free_svg = self._render(plan)
+        _, _, free_w, free_h = self._viewbox(free_svg)
+
+        self.assertIn("<image", free_svg)
+        self.assertLess(free_h, grid_h)  # hugging the blueprint is tighter than the grid frame
+        self.assertLess(free_h, 500)  # ~375 (0.5 * 750) + border, well under the ~800 grid frame
+        self.assertGreater(free_w, 700)  # landscape blueprint fills the full width
 
 
 class FloorPlanIconRenderingTests(TestCase):
