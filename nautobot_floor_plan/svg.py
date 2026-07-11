@@ -206,7 +206,19 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         With no blueprint and no freeform markers this returns exactly (0, 0, default_width,
         default_depth), keeping grid-mode output identical to prior behavior.
         """
-        min_x, min_y, max_x, max_y = 0.0, 0.0, float(default_width), float(default_depth)
+        # In freeform mode the blueprint is the subject: hug its (rotated) bounds plus any markers so it
+        # fills the viewport instead of being letterboxed inside the full grid frame. Grid mode keeps the
+        # grid frame as the viewBox so every cell and axis label stays visible.
+        hug_background = (
+            self.is_freeform
+            and self._background_data_uri is not None
+            and self.floor_plan.background_opacity > 0
+        )
+        if hug_background:
+            min_x = min_y = math.inf
+            max_x = max_y = -math.inf
+        else:
+            min_x, min_y, max_x, max_y = 0.0, 0.0, float(default_width), float(default_depth)
         expanded = False
 
         if self._background_data_uri and self.floor_plan.background_opacity > 0:
@@ -230,7 +242,11 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
             max_x, max_y = max(max_x, rb[2]), max(max_y, rb[3])
             expanded = True
 
-        if expanded:
+        if not expanded:
+            # Nothing to hug (e.g. freeform plan with no background and no positioned markers): fall back
+            # to the grid frame so the viewBox is never the inf-seeded sentinel.
+            min_x, min_y, max_x, max_y = 0.0, 0.0, float(default_width), float(default_depth)
+        else:
             min_x, min_y = min_x - self.BORDER_WIDTH, min_y - self.BORDER_WIDTH
             max_x, max_y = max_x + self.BORDER_WIDTH, max_y + self.BORDER_WIDTH
         return (min_x, min_y, max_x - min_x, max_y - min_y)
