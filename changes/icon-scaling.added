@@ -1,0 +1,1 @@
+Added marker icon sizing controls: a global slider sets one base size for every marker on a plan (so icons match regardless of footprint), and each marker can be resized individually with a corner drag handle or the plus/minus keys. Also added a background scale slider alongside blueprint opacity.

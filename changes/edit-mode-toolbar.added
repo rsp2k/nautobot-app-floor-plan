@@ -1,0 +1,1 @@
+Reworked the floor plan detail view into a plan-first layout: the rendered canvas is now the hero, and the editing tools (mode toggle, place picker, blueprint and sizing controls) collapse behind an Edit toggle in a floating toolbar so View mode stays uncluttered. Fixed a duplicated marker legend (the screen-reader mirror was rendering visibly).

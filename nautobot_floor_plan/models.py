@@ -156,6 +156,13 @@ class FloorPlan(PrimaryModel):
     bg_width = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint width in SVG units.")
     bg_height = models.FloatField(blank=True, null=True, help_text="Calibration: blueprint height in SVG units.")
     bg_rotation = models.FloatField(default=0, help_text="Calibration: blueprint rotation in degrees.")
+    # Global base size for every placed marker's icon on this plan. A single multiplier (1.0 = default)
+    # so all markers share one base icon size regardless of footprint; per-tile icon_scale composes on top.
+    icon_scale = models.FloatField(
+        default=1.0,
+        validators=[MinValueValidator(0.1)],
+        help_text="Global multiplier for placed marker icon size on this plan (1.0 = default).",
+    )
     # Source document (e.g. an architectural PDF) the blueprint is imported from. Kept so a user can
     # re-pick a page / re-crop later without re-uploading. The RenderBlueprintPages job rasterizes it
     # into BlueprintPage rows; the picked crop lands in background_image.
@@ -529,6 +536,12 @@ class FloorPlanTile(PrimaryModel):
         help_text="Freeform height, normalized to the content rect height (may exceed 1 near an edge).",
     )
     rotation = models.FloatField(default=0, help_text="Freeform rotation in degrees, clockwise.")
+    # Per-marker icon size multiplier, composed on top of the plan's global icon_scale (1.0 = default).
+    icon_scale = models.FloatField(
+        default=1.0,
+        validators=[MinValueValidator(0.1)],
+        help_text="Per-marker icon size multiplier, on top of the plan's global icon scale (1.0 = default).",
+    )
 
     class Meta:
         """Metaclass attributes."""

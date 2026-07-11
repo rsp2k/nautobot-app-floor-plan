@@ -207,6 +207,10 @@ function initFloorPlanEditing() {
         var statusRegion = document.getElementById("floor-plan-status");
         var opacityRange = document.getElementById("blueprint-opacity-range");
         var opacityNumber = document.getElementById("blueprint-opacity-number");
+        var scaleRange = document.getElementById("blueprint-scale-range");
+        var scaleOutput = document.getElementById("blueprint-scale-output");
+        var iconRange = document.getElementById("icon-scale-range");
+        var iconOutput = document.getElementById("icon-scale-output");
         var placePanel = document.getElementById("place-object-panel");
 
         var floorplanUrl = container.getAttribute("data-floorplan-api");
@@ -327,6 +331,7 @@ function initFloorPlanEditing() {
                 else teardownCalibrate();
             }
             if (placePanel) placePanel.hidden = next !== "place";
+            syncResizeHandles();
             syncModeButtons();
             announce(next + " mode");
         }
@@ -730,6 +735,64 @@ function initFloorPlanEditing() {
             }
         }
 
+        // ── Background scale (relative multiplier about center; shares the floorplan channel) ──
+        if (scaleRange && image) {
+            var scaleBase = null; // bg state captured when a drag begins; 100% maps to this
+            var applyBgScale = function (pct) {
+                pct = clamp(parseInt(pct, 10) || 100, 25, 400);
+                if (scaleOutput) scaleOutput.textContent = pct;
+                var base = scaleBase || readBg();
+                var factor = pct / 100;
+                var cx = base.nx + base.nw / 2;
+                var cy = base.ny + base.nh / 2;
+                bg.nw = base.nw * factor;
+                bg.nh = base.nh * factor;
+                bg.nx = cx - bg.nw / 2;
+                bg.ny = cy - bg.nh / 2;
+                applyBlueprintTransform();
+                return pct;
+            };
+            scaleRange.addEventListener("input", function () {
+                if (scaleBase === null) scaleBase = readBg();
+                applyBgScale(scaleRange.value);
+            });
+            scaleRange.addEventListener("change", function () {
+                applyBgScale(scaleRange.value);
+                var ch = channelFor("floorplan", floorplanUrl);
+                ch.schedule({ bg_x: bg.nx, bg_y: bg.ny, bg_width: bg.nw, bg_height: bg.nh });
+                ch.flush();
+                scaleBase = null; // recenter the slider on the committed size
+                scaleRange.value = 100;
+                if (scaleOutput) scaleOutput.textContent = 100;
+            });
+        }
+
+        // ── Global icon size (scales every marker uniformly; shares the floorplan channel) ──
+        if (iconRange) {
+            var iconBasePct = parseInt(iconRange.value, 10) || 100; // committed icon_scale% at load
+            var previewIconScale = function (pct) {
+                pct = clamp(parseInt(pct, 10) || 100, 50, 300);
+                if (iconOutput) iconOutput.textContent = pct;
+                var rel = pct / iconBasePct; // relative to what the server already baked
+                var markers = svg.querySelectorAll("g.object[data-marker-size]");
+                Array.prototype.forEach.call(markers, function (g) {
+                    // Store the original translate/rotate once, then compose a scale about the marker center.
+                    if (g.__fpBaseTransform == null) g.__fpBaseTransform = g.getAttribute("transform") || "";
+                    g.setAttribute("transform", g.__fpBaseTransform + " scale(" + rel + ")");
+                });
+                return pct;
+            };
+            iconRange.addEventListener("input", function () { previewIconScale(iconRange.value); });
+            iconRange.addEventListener("change", function () {
+                var pct = previewIconScale(iconRange.value);
+                var ch = channelFor("floorplan", floorplanUrl);
+                ch.schedule({ icon_scale: pct / 100 });
+                ch.flush();
+                // The live preview already reflects the new size; a later natural reload re-bakes exact
+                // server geometry.
+            });
+        }
+
         // ══ §E/§F  Marker place-drag + keyboard/ARIA (roving tabindex, focus ring, nudge) ══
         // Pure norm/user math is delegated to the shared, node-tested FloorPlanCoords module when it
         // is loaded (fallbacks keep this correct if that <script> is absent).
@@ -762,9 +825,16 @@ function initFloorPlanEditing() {
             if (Coords) return Coords.userToNorm(ux, uy, content);
             return { nx: (ux - content.x) / content.w, ny: (uy - content.y) / content.h };
         }
+        function loadedScale(g) {
+            // The server-baked icon_scale the DOM marker was rendered at; the live-resize baseline.
+            return parseFloat(g.dataset.iconScale) || 1;
+        }
         function writeMarker(g, nx, ny, rot) {
             var u = Coords ? Coords.normToUser(nx, ny, content) : { ux: content.x + nx * content.w, uy: content.y + ny * content.h };
-            g.setAttribute("transform", Coords ? Coords.formatTransform(u.ux, u.uy, rot) : "translate(" + u.ux + "," + u.uy + ") rotate(" + rot + ")");
+            var base = Coords ? Coords.formatTransform(u.ux, u.uy, rot) : "translate(" + u.ux + "," + u.uy + ") rotate(" + rot + ")";
+            // Compose a per-marker scale (from a live resize) about the marker center so move+resize coexist.
+            var rel = g.__iconRel;
+            g.setAttribute("transform", rel && rel !== 1 ? base + " scale(" + rel + ")" : base);
             g.dataset.posX = nx;
             g.dataset.posY = ny;
             g.dataset.rotation = rot;
@@ -826,8 +896,12 @@ function initFloorPlanEditing() {
                 g.classList.add("is-focused");
                 g.__revert = snapshotMarker(g);
                 ensureMarkerVisible(g);
+                syncResizeHandles();
             });
-            g.addEventListener("blur", function () { g.classList.remove("is-focused"); });
+            g.addEventListener("blur", function () {
+                g.classList.remove("is-focused");
+                removeResizeHandle(g);
+            });
             g.addEventListener("keydown", onMarkerKeydown);
         }
         function nudgeMarker(g, dnx, dny) {
@@ -843,6 +917,21 @@ function initFloorPlanEditing() {
             writeMarker(g, parseFloat(g.dataset.posX), parseFloat(g.dataset.posY), rot);
             channelFor("tile:" + g.dataset.tileId, tileUrl(g.dataset.tileId)).schedule({ rotation: rot });
             announce(markerName(g) + " rotated to " + Math.round(rot) + " degrees.");
+        }
+        function markerScale(g) {
+            return g.__iconAbs != null ? g.__iconAbs : loadedScale(g);
+        }
+        function setMarkerScale(g, absScale, commit) {
+            absScale = clamp(absScale, 0.1, 5);
+            g.__iconAbs = absScale;
+            g.__iconRel = absScale / loadedScale(g);
+            writeMarker(g, parseFloat(g.dataset.posX), parseFloat(g.dataset.posY), parseFloat(g.dataset.rotation) || 0);
+            var ch = channelFor("tile:" + g.dataset.tileId, tileUrl(g.dataset.tileId));
+            ch.schedule({ icon_scale: absScale });
+            if (commit) {
+                ch.flush();
+                announce(markerName(g) + " icon resized to " + Math.round(absScale * 100) + " percent.");
+            }
         }
         function commitMarker(g) {
             channelFor("tile:" + g.dataset.tileId, tileUrl(g.dataset.tileId)).flush();
@@ -891,6 +980,8 @@ function initFloorPlanEditing() {
                     case "ArrowDown": nudgeMarker(g, 0, step); break;
                     case "ArrowUp": nudgeMarker(g, 0, -step); break;
                     case "r": case "R": rotateMarker(g, e.shiftKey ? 1 : ROTATE_SNAP_DEG); break;
+                    case "+": case "=": setMarkerScale(g, markerScale(g) * 1.15, false); break;
+                    case "-": case "_": setMarkerScale(g, markerScale(g) / 1.15, false); break;
                     case "Enter": case " ": case "Spacebar": commitMarker(g); break;
                     case "Escape":
                         e.stopPropagation(); // handled here; don't also trigger the document Escape
@@ -969,6 +1060,71 @@ function initFloorPlanEditing() {
         function onMarkerCancelEv() {
             if (!activeDrag || activeDrag.type !== "marker") return;
             cancelDrag(false);
+        }
+
+        // ── Per-marker resize handle (place mode) — drag a corner to scale just that marker's icon ──
+        var resizeDrag = null;
+        function onResizeMove(e) {
+            if (!resizeDrag) return;
+            var d = Math.hypot(e.clientX - resizeDrag.center.x, e.clientY - resizeDrag.center.y);
+            if (resizeDrag.d0 < 1) return;
+            setMarkerScale(resizeDrag.el, resizeDrag.a0 * (d / resizeDrag.d0), false);
+        }
+        function onResizeUp() {
+            if (!resizeDrag) return;
+            var g = resizeDrag.el;
+            window.removeEventListener("pointermove", onResizeMove);
+            window.removeEventListener("pointerup", onResizeUp);
+            try {
+                if (resizeDrag.handle.releasePointerCapture) resizeDrag.handle.releasePointerCapture(resizeDrag.pointerId);
+            } catch (err) { /* noop */ }
+            resizeDrag = null;
+            channelFor("tile:" + g.dataset.tileId, tileUrl(g.dataset.tileId)).flush();
+            announce(markerName(g) + " icon resized to " + Math.round(markerScale(g) * 100) + " percent.");
+        }
+        function startResize(g, handle, e) {
+            // The resize gesture is owned here; stop it reaching the capture-phase marker-move router.
+            e.preventDefault();
+            e.stopPropagation();
+            var r = g.getBoundingClientRect();
+            resizeDrag = {
+                el: g,
+                handle: handle,
+                pointerId: e.pointerId,
+                center: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+                d0: Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)),
+                a0: markerScale(g),
+            };
+            try { handle.setPointerCapture(e.pointerId); } catch (err) { /* noop */ }
+            window.addEventListener("pointermove", onResizeMove);
+            window.addEventListener("pointerup", onResizeUp);
+        }
+        function addResizeHandle(g) {
+            if (g.__resizeHandle || g.dataset.canMove === "false") return;
+            var half = (parseFloat(g.dataset.markerSize) || 40) / 2;
+            var handle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            handle.setAttribute("cx", half);
+            handle.setAttribute("cy", half);
+            handle.setAttribute("r", Math.max(6, half * 0.16));
+            handle.setAttribute("class", "floor-plan-resize-handle");
+            handle.setAttribute("vector-effect", "non-scaling-stroke");
+            handle.setAttribute("aria-hidden", "true");
+            handle.addEventListener("pointerdown", function (e) { startResize(g, handle, e); });
+            g.appendChild(handle);
+            g.__resizeHandle = handle;
+        }
+        function removeResizeHandle(g) {
+            if (g.__resizeHandle) {
+                g.__resizeHandle.remove();
+                g.__resizeHandle = null;
+            }
+        }
+        // Show the handle on the focused marker while in place mode; hide otherwise.
+        function syncResizeHandles() {
+            rovingMarkers.forEach(function (g) {
+                if (uiMode === "place" && g.classList.contains("is-focused")) addResizeHandle(g);
+                else removeResizeHandle(g);
+            });
         }
 
         // Mode-preserving reload after a place (see "reload-vs-insert" note): flush every channel

@@ -13,94 +13,164 @@
         </a>
     </div>
     <h4>{{ object }}</h4>
-    <div>
-        Use shift+scroll wheel to zoom in or out.
-        Click and drag to scroll.
-        <button class="btn btn-success btn-md" id="toggle-zoom-mode">Enable Box Zoom</button>
-        <button class="btn btn-danger btn-md" id="reset-zoom">Reset View</button>
-        <br/>
-        Add a tile by clicking the plus symbol on the grid OR by using the "Add Tile" button.
-        <br/>
-        Click on a Row's Label to see the Elevation for all Racks in the row.
-    </div>
 
-    {% if can_edit %}
     {% comment %}
-    Wave D interactive editing controls. Buttons ship disabled and panels hidden; the drag layer
-    (floorplan_editing.js) enables them once the SVG is mounted, so a page without JS is unchanged.
+    Plan-first layout: the rendered canvas is the hero and fills the stage; all controls live in a
+    compact floating toolbar over it, with the editing tools tucked behind the gear so View mode stays
+    clean. Every control keeps its original id -- the JS binds by id at DOMContentLoaded, so reparenting
+    is safe but renaming is not.
     {% endcomment %}
-    <div class="floor-plan-edit-controls d-print-none" style="margin-top: 8px;">
-        <div class="btn-group" role="group" aria-label="Floor plan interaction mode" id="floor-plan-mode-group">
-            <button type="button" class="btn btn-sm btn-default active" id="mode-view" data-mode="view"
-                    aria-pressed="true" disabled aria-disabled="true">
-                <span aria-hidden="true" class="mdi mdi-cursor-default-outline"></span> View
-            </button>
-            {% if can_place %}
-            <button type="button" class="btn btn-sm btn-default" id="mode-place" data-mode="place"
-                    aria-pressed="false" disabled aria-disabled="true">
-                <span aria-hidden="true" class="mdi mdi-map-marker-plus-outline"></span> Place
-            </button>
-            {% endif %}
-            {% if can_calibrate and object.background_image %}
-            <button type="button" class="btn btn-sm btn-default" id="mode-calibrate" data-mode="calibrate"
-                    aria-pressed="false" disabled aria-disabled="true">
-                <span aria-hidden="true" class="mdi mdi-crop-rotate"></span> Calibrate
-            </button>
-            {% endif %}
+    <div class="floor-plan-stage d-print-none">
+        <div class="floor-plan-canvas" id="floor-plan-svg-container">
+            <a id="zoom-anchor"></a>
+            <div data-floor-plan-x-size="{{ object.x_size }}"
+                 data-floor-plan-y-size="{{ object.y_size }}"
+                 data-svg-url="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-svg' pk=object.pk %}"
+                 data-floorplan-id="{{ object.pk }}"
+                 data-placement-mode="{{ object.placement_mode }}"
+                 data-location-id="{{ object.location.pk }}"
+                 data-can-edit="{{ can_edit|yesno:'true,false' }}"
+                 data-can-move="{{ can_move|yesno:'true,false' }}"
+                 data-can-calibrate="{{ can_calibrate|yesno:'true,false' }}"
+                 data-icon-scale="{{ object.icon_scale }}"
+                 data-tile-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplantile-list' %}"
+                 data-floorplan-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-detail' pk=object.pk %}"
+                 data-layers-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-layers' pk=object.pk %}"
+                 {% if can_place %}data-place-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplantile-place' %}" data-placeable-types-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-placeable-types' pk=object.pk %}"{% endif %}
+                 {% if can_calibrate %}data-convert-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-convert-to-freeform' pk=object.pk %}"
+                 data-import-pdf-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-import-pdf' pk=object.pk %}"
+                 data-pages-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-pages' pk=object.pk %}"
+                 data-extract-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-extract' pk=object.pk %}"
+                 data-jobresult-api="{% url 'extras-api:jobresult-list' %}"{% endif %}
+                 id="floor-plan-svg"></div>
         </div>
 
-        {% if can_calibrate %}
-        {% comment %} Standalone (not a drag-layer mode): opens a modal to import a blueprint from a PDF. {% endcomment %}
-        <button type="button" class="btn btn-sm btn-info" id="import-pdf-button" style="margin-left: 12px;" hidden>
-            <span aria-hidden="true" class="mdi mdi-file-pdf-box"></span> Import from PDF
-        </button>
-        {% endif %}
+        {% comment %} Floating toolbar over the canvas. Zoom/pan hints move to button titles. {% endcomment %}
+        <div class="floor-plan-toolbar" role="toolbar" aria-label="Floor plan tools">
+            {% if can_edit %}
+            <button type="button" class="btn btn-sm btn-primary" id="edit-tools-button"
+                    aria-expanded="false" aria-controls="floor-plan-tools-panel" title="Edit tools">
+                <span aria-hidden="true" class="mdi mdi-tune-variant"></span> Edit
+            </button>
+            {% endif %}
+            <button type="button" class="btn btn-sm btn-default" id="layers-button"
+                    aria-expanded="false" aria-controls="layers-panel" hidden title="Show, hide, and dim markers">
+                <span aria-hidden="true" class="mdi mdi-layers-outline"></span> Layers
+            </button>
+            <span class="floor-plan-toolbar-sep" aria-hidden="true"></span>
+            <button type="button" class="btn btn-sm btn-default" id="toggle-zoom-mode"
+                    title="Toggle box-zoom / pan (shift+scroll to zoom)">Box Zoom</button>
+            <button type="button" class="btn btn-sm btn-default" id="reset-zoom" title="Reset the view">Reset</button>
+        </div>
 
-        {% if can_calibrate and object.background_image %}
-        <span class="floor-plan-opacity-control" style="margin-left: 12px; white-space: nowrap;">
-            <label for="blueprint-opacity-range" style="margin: 0 4px 0 0;">Blueprint opacity</label>
-            <input type="range" id="blueprint-opacity-range" min="0" max="100" step="1"
-                   value="{{ object.background_opacity|default:100 }}"
-                   aria-label="Blueprint opacity percentage" style="vertical-align: middle; width: 140px;">
-            <input type="number" id="blueprint-opacity-number" min="0" max="100" step="1"
-                   value="{{ object.background_opacity|default:100 }}"
-                   aria-label="Blueprint opacity percentage" style="width: 64px;">
-            <span aria-hidden="true">%</span>
-        </span>
-        {% endif %}
-    </div>
+        {% if can_edit %}
+        {% comment %}
+        Edit-tools drawer, revealed by the gear. Buttons ship disabled and the drawer hidden; the drag
+        layer (floorplan_editing.js) enables the mode buttons once the SVG mounts, so no-JS is unchanged.
+        {% endcomment %}
+        <div id="floor-plan-tools-panel" class="floor-plan-float-panel floor-plan-tools-panel" hidden
+             aria-label="Edit tools">
+            <div class="btn-group" role="group" aria-label="Floor plan interaction mode" id="floor-plan-mode-group">
+                <button type="button" class="btn btn-sm btn-default active" id="mode-view" data-mode="view"
+                        aria-pressed="true" disabled aria-disabled="true">
+                    <span aria-hidden="true" class="mdi mdi-cursor-default-outline"></span> View
+                </button>
+                {% if can_place %}
+                <button type="button" class="btn btn-sm btn-default" id="mode-place" data-mode="place"
+                        aria-pressed="false" disabled aria-disabled="true">
+                    <span aria-hidden="true" class="mdi mdi-map-marker-plus-outline"></span> Place
+                </button>
+                {% endif %}
+                {% if can_calibrate and object.background_image %}
+                <button type="button" class="btn btn-sm btn-default" id="mode-calibrate" data-mode="calibrate"
+                        aria-pressed="false" disabled aria-disabled="true">
+                    <span aria-hidden="true" class="mdi mdi-crop-rotate"></span> Calibrate
+                </button>
+                {% endif %}
+            </div>
 
-    {% if can_place %}
-    <div class="floor-plan-place-panel d-print-none" id="place-object-panel" hidden
-         style="margin-top: 8px; padding: 8px; border: 1px solid var(--nb-border-color, #cfd6dd); border-radius: 6px;">
-        <div class="form-inline" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;">
-            <div>
-                <label for="place-type-select" style="display: block; margin: 0;">Type</label>
-                <select class="form-control input-sm" id="place-type-select" aria-label="Object type to place">
-                    <option value="">Loading types…</option>
-                </select>
+            {% if can_place %}
+            <div class="floor-plan-place-panel floor-plan-tools-row" id="place-object-panel" hidden>
+                <div class="form-inline" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;">
+                    <div>
+                        <label for="place-type-select" style="display: block; margin: 0;">Type</label>
+                        <select class="form-control input-sm" id="place-type-select" aria-label="Object type to place">
+                            <option value="">Loading types…</option>
+                        </select>
+                    </div>
+                    <div style="position: relative;">
+                        <label for="place-object-input" style="display: block; margin: 0;">Object</label>
+                        <input type="text" class="form-control input-sm" id="place-object-input"
+                               role="combobox" aria-expanded="false" aria-autocomplete="list"
+                               aria-controls="place-object-listbox" autocomplete="off"
+                               placeholder="Search by name…" disabled>
+                        <ul role="listbox" id="place-object-listbox" class="floor-plan-listbox" hidden
+                            aria-label="Matching objects"></ul>
+                    </div>
+                    <div>
+                        <button type="button" class="btn btn-sm btn-primary" id="place-commit" disabled>
+                            <span aria-hidden="true" class="mdi mdi-map-marker-plus-outline"></span> Place object
+                        </button>
+                    </div>
+                    <div class="text-muted" id="place-hint" style="flex-basis: 100%; font-size: 12px;">
+                        Pick a type and object, then <strong>Place object</strong>. It drops at the view center;
+                        drag it into position, or drag a corner to resize just that marker.
+                    </div>
+                </div>
             </div>
-            <div style="position: relative;">
-                <label for="place-object-input" style="display: block; margin: 0;">Object</label>
-                <input type="text" class="form-control input-sm" id="place-object-input"
-                       role="combobox" aria-expanded="false" aria-autocomplete="list"
-                       aria-controls="place-object-listbox" autocomplete="off"
-                       placeholder="Search by name…" disabled>
-                <ul role="listbox" id="place-object-listbox" class="floor-plan-listbox" hidden
-                    aria-label="Matching objects"></ul>
-            </div>
-            <div>
-                <button type="button" class="btn btn-sm btn-primary" id="place-commit" disabled>
-                    <span aria-hidden="true" class="mdi mdi-map-marker-plus-outline"></span> Place object
+            {% endif %}
+
+            {% if can_calibrate %}
+            <div class="floor-plan-tools-row">
+                <button type="button" class="btn btn-sm btn-info" id="import-pdf-button" hidden>
+                    <span aria-hidden="true" class="mdi mdi-file-pdf-box"></span> Import from PDF
                 </button>
             </div>
-            <div class="text-muted" id="place-hint" style="flex-basis: 100%; font-size: 12px;">
-                Choose a type and object, then press <strong>Place object</strong>. It drops at the center of
-                the current view; drag it into position.
+            {% endif %}
+
+            {% if can_calibrate and object.background_image %}
+            <div class="floor-plan-tools-row floor-plan-slider-row">
+                <label for="blueprint-opacity-range">Blueprint opacity</label>
+                <input type="range" id="blueprint-opacity-range" min="0" max="100" step="1"
+                       value="{{ object.background_opacity|default:100 }}"
+                       aria-label="Blueprint opacity percentage">
+                <input type="number" id="blueprint-opacity-number" min="0" max="100" step="1"
+                       value="{{ object.background_opacity|default:100 }}"
+                       aria-label="Blueprint opacity percentage" class="floor-plan-slider-num">
+                <span aria-hidden="true">%</span>
+            </div>
+            <div class="floor-plan-tools-row floor-plan-slider-row">
+                <label for="blueprint-scale-range">Blueprint scale</label>
+                <input type="range" id="blueprint-scale-range" min="25" max="400" step="1" value="100"
+                       aria-label="Blueprint scale percentage">
+                <output id="blueprint-scale-output" for="blueprint-scale-range">100</output>
+                <span aria-hidden="true">%</span>
+            </div>
+            {% endif %}
+
+            {% if can_calibrate %}
+            <div class="floor-plan-tools-row floor-plan-slider-row">
+                <label for="icon-scale-range">Icon size</label>
+                <input type="range" id="icon-scale-range" min="50" max="300" step="5"
+                       value="{% widthratio object.icon_scale 1 100 %}"
+                       aria-label="Marker icon size percentage">
+                <output id="icon-scale-output" for="icon-scale-range">{% widthratio object.icon_scale 1 100 %}</output>
+                <span aria-hidden="true">%</span>
+            </div>
+            {% endif %}
+
+            <div class="floor-plan-tools-row">
+                <a class="rack_elevation_save_svg_link" download="floor_plan_{{ object.location.name }}.svg" href="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-svg' pk=object.pk %}">
+                    <span class="mdi mdi-content-save-outline"></span> Save SVG
+                </a>
             </div>
         </div>
+        {% endif %}
+
+        {% comment %} Layers panel floats on the right; button lives in the toolbar. {% endcomment %}
+        <div id="layers-panel" class="floor-plan-float-panel floor-plan-float-right floor-plan-layers-panel"
+             hidden role="group" aria-label="Layers"></div>
     </div>
-    {% endif %}
 
     {% if can_calibrate %}
     {% comment %} Import-from-PDF modal. JS (floorplan-import.js) drives the steps and builds the crop box. {% endcomment %}
@@ -151,35 +221,21 @@
         </div>
     </div>
     {% endif %}
-    {% endif %}
-
-    {% comment %} Layers: client-side show/hide + dim of markers by type (and named layers). Available
-    to any viewer; the button is revealed by floorplan-layers.js once the SVG has markers. {% endcomment %}
-    <div class="floor-plan-layers-controls d-print-none" style="margin-top: 8px;">
-        <button type="button" class="btn btn-sm btn-default" id="layers-button" aria-expanded="false" hidden>
-            <span aria-hidden="true" class="mdi mdi-layers-outline"></span> Layers
-        </button>
-        <div id="layers-panel" class="floor-plan-layers-panel" hidden role="group" aria-label="Layers"></div>
-    </div>
-
-    <div class="text-center">
-        <a class="rack_elevation_save_svg_link" download="floor_plan_{{ object.location.name }}.svg" href="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-svg' pk=object.pk %}">
-            <span class="mdi mdi-content-save-outline"></span> Save SVG
-        </a>
-    </div>
 
     {% comment %}
-    Screen-reader channels: a polite live region for edit announcements and an HTML mirror of the
-    in-SVG legend (the in-SVG legend is aria-hidden; SVG <text> is not reliably navigable).
+    Screen-reader channels: a polite live region for edit announcements, and a screen-reader-only
+    mirror of the in-SVG legend (the in-SVG legend is aria-hidden and SVG <text> is not reliably
+    navigable, so this HTML copy is exposed to assistive tech only -- sr-only keeps it invisible).
     {% endcomment %}
     <div id="floor-plan-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
-    <div id="floor-plan-legend" role="group" aria-label="Marker legend" class="floor-plan-legend-mirror d-print-none"></div>
+    <div id="floor-plan-legend" role="group" aria-label="Marker legend" class="sr-only"></div>
 
     {% comment %}
     Add Tippy.js resources - using local files for air-gapped environments
     Add Gsap.js resources - using local files for air-gapped environments
     {% endcomment %}
     <link href="{% static 'nautobot_floor_plan/css/light.css' %}" rel="stylesheet"/>
+    <link href="{% static 'nautobot_floor_plan/css/floorplan-tools.css' %}" rel="stylesheet"/>
     <script src="{% static 'nautobot_floor_plan/tippy.js-6.3.7/popper.min.js' %}"></script>
     <script src="{% static 'nautobot_floor_plan/tippy.js-6.3.7/tippy-bundle.umd.min.js' %}"></script>
     <script src="{% static 'nautobot_floor_plan/js/floorplan.js' %}?v={% now 'U' %}"></script>
@@ -188,37 +244,11 @@
     <script src="{% static 'nautobot_floor_plan/js/floorplan_editing.js' %}?v={% now 'U' %}"></script>
     <script src="{% static 'nautobot_floor_plan/js/floorplan-import.js' %}?v={% now 'U' %}"></script>
     <script src="{% static 'nautobot_floor_plan/js/floorplan-layers.js' %}?v={% now 'U' %}"></script>
+    <script src="{% static 'nautobot_floor_plan/js/floorplan-tools.js' %}?v={% now 'U' %}"></script>
     <script>
         const ZOOM_DURATION = {{ zoom_duration }};
         const HIGHLIGHT_DURATION = {{ highlight_duration }};
     </script>
-
-    {% comment %}
-    Scale the SVG by default to match the page width, preserving its aspect-ratio.
-    See https://css-tricks.com/scale-svg/ for more details.
-    {% endcomment %}
-    <div id="floor-plan-svg-container" style="position: relative; height: 0; width: 100%; padding: 0; padding-bottom: calc(100% * ({{ object.y_size }} * {{ object.tile_depth }}) / ({{ object.x_size }} * {{ object.tile_width }}) / 1.2);">
-        <a id="zoom-anchor"></a>
-        <div data-floor-plan-x-size="{{ object.x_size }}"
-             data-floor-plan-y-size="{{ object.y_size }}"
-             data-svg-url="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-svg' pk=object.pk %}"
-             data-floorplan-id="{{ object.pk }}"
-             data-placement-mode="{{ object.placement_mode }}"
-             data-location-id="{{ object.location.pk }}"
-             data-can-edit="{{ can_edit|yesno:'true,false' }}"
-             data-can-move="{{ can_move|yesno:'true,false' }}"
-             data-can-calibrate="{{ can_calibrate|yesno:'true,false' }}"
-             data-tile-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplantile-list' %}"
-             data-floorplan-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-detail' pk=object.pk %}"
-             data-layers-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-layers' pk=object.pk %}"
-             {% if can_place %}data-place-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplantile-place' %}" data-placeable-types-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-placeable-types' pk=object.pk %}"{% endif %}
-             {% if can_calibrate %}data-convert-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-convert-to-freeform' pk=object.pk %}"
-             data-import-pdf-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-import-pdf' pk=object.pk %}"
-             data-pages-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-pages' pk=object.pk %}"
-             data-extract-api="{% url 'plugins-api:nautobot_floor_plan-api:floorplan-extract' pk=object.pk %}"
-             data-jobresult-api="{% url 'extras-api:jobresult-list' %}"{% endif %}
-             id="floor-plan-svg" style="position: absolute; height: 100%; width: 100%; left: 0; top: 0;"></div>
-    </div>
 {% endwith %}
 {% endwith %}
 {% else %}

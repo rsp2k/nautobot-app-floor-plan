@@ -20,9 +20,7 @@
   function injectStyles() {
     if (document.getElementById("floor-plan-layers-styles")) return;
     const css = `
-      .floor-plan-layers-panel { display: inline-block; vertical-align: top; margin-top: 6px;
-        padding: 8px 10px; border: 1px solid var(--nb-border-color, #cfd6dd); border-radius: 6px;
-        background: var(--nb-body-bg, #fff); min-width: 240px; }
+      .floor-plan-layers-panel { min-width: 240px; }
       .floor-plan-layers-panel .layer-row { display: flex; align-items: center; gap: 8px;
         padding: 3px 0; }
       .floor-plan-layers-panel .layer-row label { margin: 0; flex: 1 1 auto; cursor: pointer;
