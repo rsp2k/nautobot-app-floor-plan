@@ -104,6 +104,26 @@ class FloorPlanViewSet(NautobotModelViewSet):  # pylint: disable=too-many-ancest
             {"floor_plan": floor_plan.pk, "location": floor_plan.location.pk, "placeable_types": rows}
         )
 
+    @extend_schema(responses={200: serializers.FloorPlanLayersResponseSerializer})
+    @action(detail=True)
+    def layers(self, request, *, pk):
+        """List the layers that apply to this plan (its own + global), ordered for the panel."""
+        from nautobot_floor_plan.layers import applicable_layers  # noqa: PLC0415
+
+        floor_plan = get_object_or_404(self.queryset.restrict(request.user, "view"), pk=pk)
+        rows = [
+            {
+                "id": layer.pk,
+                "name": layer.name,
+                "color": layer.color,
+                "opacity": layer.opacity,
+                "default_visible": layer.default_visible,
+                "display_order": layer.display_order,
+            }
+            for layer in applicable_layers(floor_plan)
+        ]
+        return Response({"floor_plan": floor_plan.pk, "layers": rows})
+
     @extend_schema(request=None, responses={202: serializers.BlueprintImportResultSerializer})
     @action(
         detail=True,
@@ -250,3 +270,19 @@ class FloorPlanObjectTypeViewSet(NautobotModelViewSet):
     queryset = models.FloorPlanObjectType.objects.all()
     serializer_class = serializers.FloorPlanObjectTypeSerializer
     filterset_class = filters.FloorPlanObjectTypeFilterSet
+
+
+class FloorPlanLayerViewSet(NautobotModelViewSet):
+    """FloorPlanLayer viewset."""
+
+    queryset = models.FloorPlanLayer.objects.all()
+    serializer_class = serializers.FloorPlanLayerSerializer
+    filterset_class = filters.FloorPlanLayerFilterSet
+
+
+class FloorPlanLayerObjectViewSet(NautobotModelViewSet):
+    """FloorPlanLayerObject viewset -- REST management of a layer's static membership set."""
+
+    queryset = models.FloorPlanLayerObject.objects.all()
+    serializer_class = serializers.FloorPlanLayerObjectSerializer
+    filterset_class = filters.FloorPlanLayerObjectFilterSet

@@ -114,3 +114,40 @@ class FloorPlanObjectTypeFilterSet(NautobotFilterSet):
             "enabled",
             "tags",
         ]
+
+
+class FloorPlanLayerFilterSet(NautobotFilterSet):
+    """Filter for FloorPlanLayer."""
+
+    q = SearchFilter(
+        filter_predicates={
+            "name": "icontains",
+        },
+    )
+
+    class Meta:
+        """Meta attributes."""
+
+        model = models.FloorPlanLayer
+        fields = [  # pylint: disable=nb-use-fields-all
+            "name",
+            "floor_plan",
+            "default_visible",
+            "display_order",
+            "tags",
+        ]
+
+
+class FloorPlanLayerObjectFilterSet(NautobotFilterSet):
+    """Filter for FloorPlanLayerObject (a layer's static membership rows)."""
+
+    class Meta:
+        """Meta attributes."""
+
+        model = models.FloorPlanLayerObject
+        fields = [  # pylint: disable=nb-use-fields-all
+            "layer",
+            "content_type",
+            "object_id",
+            "tags",
+        ]

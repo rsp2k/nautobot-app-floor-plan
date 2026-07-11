@@ -8,6 +8,7 @@ import json
 import logging
 
 from django import forms
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
 from django.forms import formset_factory
 from nautobot.apps.config import get_app_settings_or_config
@@ -22,6 +23,7 @@ from nautobot.apps.forms import (
     add_blank_choice,
 )
 from nautobot.dcim.models import Device, Location, PowerFeed, PowerPanel, Rack, RackGroup
+from nautobot.extras.models import DynamicGroup, Tag
 
 from nautobot_floor_plan import choices, models
 from nautobot_floor_plan.utils import general
@@ -794,3 +796,68 @@ class FloorPlanObjectTypeBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditFor
         """Meta attributes."""
 
         fields = ["pk", "color", "legend_order", "enabled", "tags"]
+
+
+class FloorPlanLayerForm(NautobotModelForm):
+    """Create/edit form for a marker-visibility layer."""
+
+    floor_plan = DynamicModelChoiceField(
+        queryset=models.FloorPlan.objects.all(),
+        required=False,
+        help_text="Leave blank for a global layer that applies to every plan.",
+    )
+    # A plain multi-select is reliable for the (finite, ~100) content-type list; tags and dynamic
+    # groups can be numerous, so they use the ajax-backed dynamic widgets.
+    source_content_types = forms.ModelMultipleChoiceField(
+        queryset=ContentType.objects.all(),
+        required=False,
+        label="Source content types",
+    )
+    source_tags = DynamicModelMultipleChoiceField(queryset=Tag.objects.all(), required=False, label="Source tags")
+    source_dynamic_groups = DynamicModelMultipleChoiceField(
+        queryset=DynamicGroup.objects.all(), required=False, label="Source dynamic groups"
+    )
+
+    class Meta:
+        """Meta attributes."""
+
+        model = models.FloorPlanLayer
+        fields = [
+            "name",
+            "floor_plan",
+            "source_content_types",
+            "source_tags",
+            "source_dynamic_groups",
+            "color",
+            "opacity",
+            "default_visible",
+            "display_order",
+            "tags",
+        ]
+
+
+class FloorPlanLayerFilterForm(NautobotFilterForm):  # pylint: disable=too-many-ancestors
+    """Filter form for FloorPlanLayer."""
+
+    model = models.FloorPlanLayer
+    field_order = ["q", "floor_plan", "default_visible"]
+
+    q = forms.CharField(required=False, label="Search")
+    floor_plan = DynamicModelChoiceField(queryset=models.FloorPlan.objects.all(), required=False)
+    default_visible = forms.NullBooleanField(required=False)
+    tag = TagFilterField(model)
+
+
+class FloorPlanLayerBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):  # pylint: disable=too-many-ancestors
+    """Bulk edit form for FloorPlanLayer."""
+
+    pk = forms.ModelMultipleChoiceField(queryset=models.FloorPlanLayer.objects.all(), widget=forms.MultipleHiddenInput)
+    color = forms.CharField(max_length=6, required=False)
+    opacity = forms.IntegerField(required=False, min_value=0, max_value=100)
+    default_visible = forms.NullBooleanField(required=False)
+    display_order = forms.IntegerField(required=False)
+
+    class Meta:
+        """Meta attributes."""
+
+        fields = ["pk", "color", "opacity", "default_visible", "display_order", "tags"]

@@ -113,6 +113,24 @@ class ConvertToFreeformResultSerializer(serializers.Serializer):  # pylint: disa
     tiles_total = serializers.IntegerField()
 
 
+class FloorPlanLayerPanelSerializer(serializers.Serializer):  # pylint: disable=abstract-method
+    """One row of the plan's Layers panel: everything the client needs to render and toggle a layer."""
+
+    id = serializers.UUIDField()
+    name = serializers.CharField()
+    color = serializers.CharField(allow_blank=True)
+    opacity = serializers.IntegerField()
+    default_visible = serializers.BooleanField()
+    display_order = serializers.IntegerField()
+
+
+class FloorPlanLayersResponseSerializer(serializers.Serializer):  # pylint: disable=abstract-method
+    """Envelope for the ``layers`` action."""
+
+    floor_plan = serializers.UUIDField()
+    layers = FloorPlanLayerPanelSerializer(many=True)
+
+
 class FloorPlanTilePlacementSerializer(serializers.Serializer):
     """Input-only serializer that places any registered object type at a normalized position.
 
@@ -211,6 +229,26 @@ class FloorPlanObjectTypeSerializer(NautobotModelSerializer, TaggedModelSerializ
         """Meta attributes."""
 
         model = models.FloorPlanObjectType
+        fields = "__all__"
+
+
+class FloorPlanLayerSerializer(NautobotModelSerializer, TaggedModelSerializerMixin):
+    """FloorPlanLayer Serializer."""
+
+    class Meta:
+        """Meta attributes."""
+
+        model = models.FloorPlanLayer
+        fields = "__all__"
+
+
+class FloorPlanLayerObjectSerializer(NautobotModelSerializer, TaggedModelSerializerMixin):
+    """FloorPlanLayerObject Serializer -- the static membership set of a layer."""
+
+    class Meta:
+        """Meta attributes."""
+
+        model = models.FloorPlanLayerObject
         fields = "__all__"
 
 

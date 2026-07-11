@@ -13,6 +13,7 @@ router = NautobotUIViewSetRouter()
 router.register("floor-plans", views.FloorPlanUIViewSet)
 router.register("floor-plan-tiles", views.FloorPlanTileUIViewSet)
 router.register("object-types", views.FloorPlanObjectTypeUIViewSet)
+router.register("layers", views.FloorPlanLayerUIViewSet)
 
 urlpatterns = [
     path("locations/<uuid:pk>/floor_plan/", views.LocationFloorPlanTab.as_view(), name="location_floor_plan_tab"),

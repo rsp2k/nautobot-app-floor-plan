@@ -1,0 +1,1 @@
+Added floor plan layers: a Layers panel on the rendered plan toggles marker visibility and dims by content type, and by named `FloorPlanLayer` groups whose membership comes from content types, tags, dynamic groups, and a manual object set (global or per-plan). Status color always wins; layers only show/hide and dim.

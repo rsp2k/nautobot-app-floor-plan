@@ -75,6 +75,9 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         self.base_url = base_url.rstrip("/")
         self.request = request
         self._present_types = {}
+        # {(content_type.label_lower, object_pk): [layer_id, ...]}; populated in render() when the
+        # plan has any applicable FloorPlanLayers. None/empty = no named-layer membership to emit.
+        self._layer_membership = None
         self.add_url = self.base_url + reverse("plugins:nautobot_floor_plan:floorplantile_add")
         self.return_url = (
             reverse("plugins:nautobot_floor_plan:location_floor_plan_tab", kwargs={"pk": self.floor_plan.location.pk})
@@ -1008,6 +1011,12 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
         group["tabindex"] = "-1"
         group["aria-label"] = self._marker_aria_label(obj, label, tile)
         group["data-can-move"] = "true"
+        # Layer keying: the dotted content type drives the per-type visibility toggles; named-layer
+        # membership (tags/dynamic-groups/static) is resolved server-side and emitted as data-layers.
+        group["data-content-type"] = f"{obj._meta.app_label}.{obj._meta.model_name}"
+        layer_ids = self._layer_membership.get((obj._meta.label_lower, obj.pk)) if self._layer_membership else None
+        if layer_ids:
+            group["data-layers"] = " ".join(layer_ids)
         # Backing rect: status fill and drag target.
         group.add(
             drawing.rect(
@@ -1129,6 +1138,12 @@ class FloorPlanSVG:  # pylint: disable=too-many-instance-attributes
                 "placed_content_type",
             ).prefetch_related("placed_object")
         )
+
+        # Resolve layer membership once for every placed object, so each freeform marker can carry its
+        # data-layers without a per-tile query. Empty (and free) when no layers are defined.
+        from nautobot_floor_plan.layers import resolve_layers  # noqa: PLC0415
+
+        self._layer_membership = resolve_layers(self.floor_plan, [tile.placed_object for tile in tiles])
 
         # 1. Blueprint first, so it sits behind grid and tiles.
         self._draw_background_image(drawing)

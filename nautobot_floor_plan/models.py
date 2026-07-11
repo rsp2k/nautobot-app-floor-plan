@@ -997,3 +997,128 @@ class BlueprintPage(PrimaryModel):
     def __str__(self):
         """Stringify instance."""
         return f"{self.floor_plan} page {self.page_number}"
+
+
+@extras_features(
+    "custom_fields",
+    "custom_validators",
+    "export_templates",
+    "graphql",
+    "relationships",
+    "webhooks",
+)
+class FloorPlanLayer(PrimaryModel):
+    """A named, show/hideable group of markers on rendered floor plans (e.g. an "AP layer").
+
+    Membership is the union of rule sources (content types, tags, dynamic groups) and a manual static
+    set (``FloorPlanLayerObject`` rows): a marker belongs to the layer if it matches any source. A
+    layer scoped to a ``floor_plan`` applies only there; a global layer (``floor_plan=None``) applies
+    to every plan. Styling is visibility + dim only -- a layer never recolors a marker, so a marker's
+    Status color always wins. ``color`` here is a panel swatch, nothing more.
+    """
+
+    name = models.CharField(max_length=100)
+    floor_plan = models.ForeignKey(
+        to="nautobot_floor_plan.FloorPlan",
+        on_delete=models.CASCADE,
+        related_name="layers",
+        blank=True,
+        null=True,
+        help_text="If set, this layer applies only to this plan; leave blank for a global layer.",
+    )
+    source_content_types = models.ManyToManyField(
+        to="contenttypes.ContentType",
+        related_name="floor_plan_layers",
+        blank=True,
+        help_text="Markers of these content types are members.",
+    )
+    source_tags = models.ManyToManyField(
+        to="extras.Tag",
+        related_name="floor_plan_layers",
+        blank=True,
+        help_text="Markers whose object carries any of these tags are members.",
+    )
+    source_dynamic_groups = models.ManyToManyField(
+        to="extras.DynamicGroup",
+        related_name="floor_plan_layers",
+        blank=True,
+        help_text="Markers whose object is a member of any of these dynamic groups are members.",
+    )
+    color = models.CharField(
+        max_length=6,
+        blank=True,
+        help_text="Hex color for the panel swatch only, no leading '#'. Never applied to markers.",
+    )
+    opacity = models.PositiveSmallIntegerField(
+        default=100,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Default dim level (0-100) applied to members while the layer is shown.",
+    )
+    default_visible = models.BooleanField(default=True, help_text="Whether the layer starts shown when a plan loads.")
+    display_order = models.IntegerField(default=100, help_text="Lower sorts first in the Layers panel.")
+
+    class Meta:
+        """Meta attributes."""
+
+        ordering = ["display_order", "name"]
+        constraints = [
+            # NULL floor_plan is distinct on both backends, so two global layers may share a name; a
+            # per-plan name is unique within that plan. Good enough without a partial index.
+            models.UniqueConstraint(fields=["floor_plan", "name"], name="floorplanlayer_unique_plan_name"),
+        ]
+
+    def __str__(self):
+        """Stringify instance."""
+        scope = self.floor_plan if self.floor_plan_id else "global"
+        return f"{self.name} ({scope})"
+
+
+class FloorPlanLayerObject(PrimaryModel):
+    """A single object explicitly pinned into a ``FloorPlanLayer``'s static membership set.
+
+    The generic ``(content_type, object_id)`` pair mirrors ``FloorPlanTile``'s placement pair so any
+    placeable object can join a layer regardless of type. These rows are unioned with the layer's rule
+    sources during membership resolution. Managed through the layer form / REST API, not its own view.
+    """
+
+    layer = models.ForeignKey(
+        to="nautobot_floor_plan.FloorPlanLayer",
+        on_delete=models.CASCADE,
+        related_name="static_objects",
+    )
+    content_type = models.ForeignKey(
+        to="contenttypes.ContentType",
+        on_delete=models.CASCADE,
+        related_name="floor_plan_layer_objects",
+    )
+    object_id = models.UUIDField(db_index=True)
+    obj = GenericForeignKey("content_type", "object_id")
+
+    class Meta:
+        """Meta attributes."""
+
+        ordering = ["layer"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["layer", "content_type", "object_id"],
+                name="floorplanlayerobject_unique_member",
+            ),
+        ]
+
+    def __str__(self):
+        """Stringify instance."""
+        return f"{self.obj} in {self.layer}"
+
+    def clean(self):
+        """A plan-scoped layer's static object must live in the plan's Location (mirror FloorPlanTile)."""
+        super().clean()
+        if not (self.layer_id and self.layer.floor_plan_id and self.object_id):
+            return
+        obj = self.obj
+        if obj is None or not registry.is_registered(obj):
+            return
+        location = registry.resolve_location(obj)
+        if location is not None and location != self.layer.floor_plan.location:
+            raise ValidationError(
+                {"object_id": f"{obj} must belong to Location {self.layer.floor_plan.location}, not {location}."}
+            )
